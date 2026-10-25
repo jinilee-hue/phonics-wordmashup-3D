@@ -1,0 +1,5 @@
+node_modules/
+dist/
+shot.js
+screenshot.png
+.DS_Store
