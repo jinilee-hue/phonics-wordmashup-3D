@@ -3,3 +3,4 @@ dist/
 shot.js
 screenshot.png
 .DS_Store
+__pycache__/
