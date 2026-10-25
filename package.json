@@ -8,10 +8,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "phaser": "^3.88.2"
+    "phaser": "^3.88.2",
+    "three": "^0.180.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
+    "@types/three": "^0.180.0",
     "playwright": "^1.60.0",
     "typescript": "^5.4.5",
     "vite": "^8.0.12"

@@ -2,11 +2,13 @@ import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { gameAudio } from './audio';
+import { start3D } from './gl';
 
 runIntro(() => {
-  new Phaser.Game({
+  const game = new Phaser.Game({
     type: Phaser.AUTO,
     backgroundColor: '#0a0a1a',
+    transparent: true,          // 3D: the three.js stage shows through under the Phaser UI
     parent: 'game-container',
     scale: {
       mode: Phaser.Scale.RESIZE,
@@ -14,6 +16,7 @@ runIntro(() => {
     },
     scene: [BootScene, GameScene],
   });
+  start3D(game);
 });
 
 // ── Intro video overlay ──────────────────────────────────────────────────────
