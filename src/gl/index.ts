@@ -265,6 +265,7 @@ function wireReward(scene: Any) {
   state.reward?.stop();
   state.reward = new Reward(scene);
   const countUp = scene.countUp, bump = scene.bumpBadge, win = scene.onRoundWin;
+  // a Replay restarts the scene and runs attach() again on the same scene object: wrap only once
   if (win.__wm3dReward) return;
   const cu = function (this: Any, txt: Any, from: number, to: number) {
     if (state.rewardHold) { state.rewardHold.calls.push([txt, from, to]); txt.setText(`${from}`); return; }
@@ -290,7 +291,10 @@ function wireReward(scene: Any) {
       gains.push({
         kind, amount: c[2] - c[1],
         hud: txt.active ? { x: txt.x - 76 * k, y: txt.y, size: 46 * k } : null,
-        arrive: () => { countUp.call(scene, txt, c[1], c[2]); bump.call(scene, txt); },
+        arrive: () => {
+          if (!txt.active || !scene.sys.isActive()) return;
+          countUp.call(scene, txt, c[1], c[2]); bump.call(scene, txt);
+        },
       });
     }
     try {
@@ -301,6 +305,9 @@ function wireReward(scene: Any) {
     }
   };
   for (const [name, f] of [['countUp', cu], ['bumpBadge', bb], ['onRoundWin', rw]] as const) {
+    // __wm3d too: on every attach the stopReveal/hold wrapper checks it, and must not wrap this one again
+    // (it did after a Replay: every win then played the reward twice, the outer play broke the inner one)
+    (f as Any).__wm3d = true;
     (f as Any).__wm3dReward = true;
     scene[name] = f;
   }

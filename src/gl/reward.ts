@@ -39,27 +39,44 @@ const bez = (a: number, b: number, c: number, t: number) => (1 - t) * (1 - t) * 
 
 export class Reward {
   private live: Any[] = [];
+  /** its tweens and timers: removed by stop(), so nothing of a stopped reward runs on (destroyed emitters threw) */
+  private jobs: Any[] = [];
+  /** bumped by stop(): callbacks of an older play see a different number and do nothing */
+  private gen = 0;
+  /** gains that have not reached the HUD yet */
+  private pending = new Set<Gain>();
   private rnd: () => number = Math.random;
 
   constructor(private scene: Any) {
-    scene.events?.once('shutdown', () => this.stop());
+    scene.events?.once('shutdown', () => this.stop(false));        // a restart resets the score anyway
   }
 
-  stop() {
+  /** End the reward at once. `flush`: gains that have not reached the HUD yet are counted there now. */
+  stop(flush = true) {
+    this.gen++;
+    for (const j of this.jobs.splice(0)) { try { j.remove?.(false); } catch { /* gone */ } }
     for (const o of this.live.splice(0)) {
       try { this.scene.tweens.killTweensOf(o); } catch { /* gone */ }
       try { o.destroy?.(); } catch { /* gone */ }
     }
+    const left = [...this.pending];
+    this.pending.clear();
+    if (flush) for (const g of left) { try { g.arrive(); } catch (err) { console.warn('[wm3d] reward', err); } }
   }
 
   private keep<T>(o: T): T { this.live.push(o); return o; }
+  private job<T>(j: T): T { this.jobs.push(j); return j; }
 
   /**
    * @param card the result card container (its bounds place the burst and the chips)
    * @param avoid a screen box the chip row must not cover (Glee), or null
    */
   play(card: Any, gains: Gain[], avoid: { l: number; r: number; t: number; b: number } | null) {
+    if (!gains.length) return 0;
     this.stop();
+    const gen = ++this.gen, alive = () => gen === this.gen;
+    gains.forEach(g => this.pending.add(g));
+    const arrive = (g: Gain) => { if (this.pending.delete(g)) g.arrive(); };
     const sc = this.scene, tw = sc.tweens;
     const W = sc.gw ?? sc.scale.width, H = sc.gh ?? sc.scale.height;
     const s = Math.min(W / 1280, H / 720);
@@ -87,7 +104,7 @@ export class Reward {
         shadow: { offsetX: 0, offsetY: 2, color: '#000000', blur: 4, fill: true },
       }).setOrigin(0, 0.5);
       c.add([bg, icon, txt]);
-      tw.add({ targets: c, scale: 1, duration: 300, delay: (REWARD.chip + i * 0.09) * 1000, ease: 'Back.easeOut' });
+      this.job(tw.add({ targets: c, scale: 1, duration: 300, delay: (REWARD.chip + i * 0.09) * 1000, ease: 'Back.easeOut' }));
       return { g, c, icon, txt, isz, x, y: chipY, landed: 0, total: COUNT[g.kind] };
     });
 
@@ -113,10 +130,11 @@ export class Reward {
         scale: { start: 0.6 * s, end: 0 }, alpha: { start: 0.85, end: 0 }, tint: TRAIL[kind], blendMode: 'ADD', emitting: false,
       }).setDepth(71));
       const T = REWARD.out + REWARD.home;
-      tw.addCounter({
+      this.job(tw.addCounter({
         from: 0, to: 1, duration: T * 1000, delay: delay * 1000, ease: 'Linear',
-        onStart: () => trail.start(),
+        onStart: () => { if (alive()) trail.start(); },
         onUpdate: (t: Any) => {
+          if (!alive()) return;
           const u = t.getValue() * T;
           let x: number, y: number, k: number;
           if (u < REWARD.out) {
@@ -143,22 +161,24 @@ export class Reward {
           }
         },
         onComplete: () => {
+          if (!alive()) return;
           img.destroy(); trail.stop();
-          sc.time.delayedCall(420, () => trail.destroy());
+          this.job(sc.time.delayedCall(420, () => trail.destroy()));
           this.land(chip, s);
         },
-      });
+      }));
     });
 
     // ── then each chip's icon flies up into its HUD badge ──
     chips.forEach((chip, i) => {
       const at = (Math.max(lastLand, REWARD.chip + 0.4) + REWARD.hold + i * 0.08) * 1000;
-      sc.time.delayedCall(at, () => {
-        if (!chip.c.active) { chip.g.arrive(); return; }
+      this.job(sc.time.delayedCall(at, () => {
+        if (!alive()) return;
+        if (!chip.c.active) { arrive(chip.g); return; }
         const hud = chip.g.hud;
         const from = { x: chip.c.x + chip.icon.x, y: chip.c.y };
-        tw.add({ targets: chip.c, alpha: 0, scale: 0.85, duration: 260, delay: 120, ease: 'Cubic.easeIn' });
-        if (!hud) { chip.g.arrive(); return; }
+        this.job(tw.add({ targets: chip.c, alpha: 0, scale: 0.85, duration: 260, delay: 120, ease: 'Cubic.easeIn' }));
+        if (!hud) { arrive(chip.g); return; }
         const img = this.keep(sc.add.image(from.x, from.y, ICON[chip.g.kind]).setDepth(72));
         const k0 = chip.isz / Math.max(img.width, img.height), k1 = hud.size / Math.max(img.width, img.height);
         img.setScale(k0);
@@ -168,22 +188,24 @@ export class Reward {
         }).setDepth(71));
         const side = i - (chips.length - 1) / 2;
         const mx = (from.x + hud.x) / 2 + side * 60 * s, my = (from.y + hud.y) / 2 + 40 * s;
-        tw.addCounter({
+        this.job(tw.addCounter({
           from: 0, to: 1, duration: REWARD.up * 1000, ease: 'Linear',
           onUpdate: (t: Any) => {
+            if (!alive()) return;
             const a = t.getValue(), e = easeInOutCubic(a);
             img.setPosition(bez(from.x, mx, hud.x, e), bez(from.y, my, hud.y, e));
             img.setScale(k0 + (k1 * 1.25 - k0) * Math.sin(Math.min(1, a) * Math.PI * 0.5) - (a > 0.85 ? (a - 0.85) / 0.15 * k1 * 0.25 : 0));
             if (chip.g.kind === 'coin') img.setScale(img.scaleX * Math.max(0.2, Math.abs(Math.cos(a * Math.PI * 2))), img.scaleY);
           },
           onComplete: () => {
-            trail.stop(); sc.time.delayedCall(420, () => trail.destroy());
-            chip.g.arrive();
+            if (!alive()) return;
+            trail.stop(); this.job(sc.time.delayedCall(420, () => trail.destroy()));
+            arrive(chip.g);
             this.sparkle(hud.x, hud.y, TRAIL[chip.g.kind], 10, s);
-            tw.add({ targets: img, alpha: 0, scale: k1 * 1.5, duration: 140, onComplete: () => img.destroy() });
+            this.job(tw.add({ targets: img, alpha: 0, scale: k1 * 1.5, duration: 140, onComplete: () => img.destroy() }));
           },
-        });
-      });
+        }));
+      }));
     });
     return (Math.max(lastLand, REWARD.chip + 0.4) + REWARD.hold + (chips.length - 1) * 0.08 + REWARD.up) ;
   }
@@ -192,7 +214,7 @@ export class Reward {
     chip.landed++;
     const v = Math.round(chip.g.amount * Math.min(1, chip.landed / chip.total));
     chip.txt.setText(`+${v}`);
-    this.scene.tweens.add({ targets: chip.c, scale: 1.13, duration: 80, yoyo: true, ease: 'Quad.easeOut' });
+    this.job(this.scene.tweens.add({ targets: chip.c, scale: 1.13, duration: 80, yoyo: true, ease: 'Quad.easeOut' }));
     this.sparkle(chip.c.x + chip.icon.x, chip.c.y, TRAIL[chip.g.kind as Kind], 6, s);
   }
 
@@ -203,6 +225,6 @@ export class Reward {
       tint: [tint, 0xFFFFFF], blendMode: 'ADD', emitting: false,
     }).setDepth(73));
     e.explode(n);
-    sc.time.delayedCall(500, () => e.destroy());
+    this.job(sc.time.delayedCall(500, () => e.destroy()));
   }
 }
