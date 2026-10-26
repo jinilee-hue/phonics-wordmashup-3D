@@ -25,8 +25,11 @@ OUT = os.path.join(ROOT, 'public', 'gl', 'cards')
 TS = os.path.join(ROOT, 'src', 'gl', 'cardFaces.ts')
 
 FACE_W, FACE_H = 600, 800          # 3:4, same box as the 2D card (200 x 268 ~ 0.746)
-RADIUS = 0.085                     # face corner radius, fraction of FACE_W (shared with the 3D slab)
+RADIUS = 0.105                     # face corner radius, fraction of FACE_W (shared with the 3D slab).
+                                   # The art's own corners measure 0.094-0.117 (median 0.0996, see the
+                                   # 'art corner radius' line); 0.085 left wall/smear wedges at every corner.
 INSET = 0.006                      # trim a hair off every edge (AA fringe / bevel residue)
+EDGE_BAND = 5                      # px at the outline re-filled from just inside (fringe, smears)
 
 
 def lum(rgb):
@@ -244,6 +247,41 @@ def rounded_mask(W, H, r, ss=4):
     return big.resize((W, H), Image.LANCZOS)
 
 
+def edge_extend(face, r, band):
+    """Re-fill the outermost `band` px of the rounded outline (and the pixels just outside it, which
+    the antialiased mask edge still shows) with colour from `band`+1 px further in, along the inward
+    normal.  Removes the wall / smear wedges that the art leaves at its corners, so the painted rim
+    runs cleanly all the way to the slab edge."""
+    a = np.asarray(face).astype(np.float32)
+    H, W = a.shape[:2]
+    ys, xs = np.mgrid[0:H, 0:W].astype(np.float32) + 0.5
+    cx = np.clip(xs, r, W - r); cy = np.clip(ys, r, H - r)      # nearest corner-circle centre
+    dx, dy = xs - cx, ys - cy
+    corner = (dx != 0) & (dy != 0)
+    rr = np.maximum(np.hypot(dx, dy), 1e-6)
+    dl, dR, dt, db = xs, W - xs, ys, H - ys
+    m = np.minimum(np.minimum(dl, dR), np.minimum(dt, db))
+    nx = np.zeros_like(xs); ny = np.zeros_like(xs)
+    nx[dl == m] = 1
+    nx[(dR == m) & (dl != m)] = -1
+    hor = (dl != m) & (dR != m)
+    ny[hor & (dt == m)] = 1
+    ny[hor & (db == m) & (dt != m)] = -1
+    d = m.copy()
+    d[corner] = r - rr[corner]
+    nx[corner] = -dx[corner] / rr[corner]
+    ny[corner] = -dy[corner] / rr[corner]
+    sel = d < band
+    step = (band + 1.0) - d[sel]
+    tx = xs[sel] + nx[sel] * step - 0.5
+    ty = ys[sel] + ny[sel] * step - 0.5
+    out = a.copy()
+    for ch in range(3):
+        o = out[..., ch]
+        o[sel] = bilinear(a[..., ch], tx, ty)
+    return Image.fromarray(np.clip(out + 0.5, 0, 255).astype(np.uint8), 'RGB')
+
+
 def bilinear(img, x, y):
     h, w = img.shape
     x = np.clip(x, 0, w - 1.001); y = np.clip(y, 0, h - 1.001)
@@ -329,16 +367,38 @@ def detect(path, side):
     return dict(im=im, rgba=rgba, lines=lines, steps=steps, pts=pts, size=size, side=side)
 
 
-def render(d, lines):
+def corner_radius(alpha, ss):
+    """The art's own corner radius (output px) at the free top-far corner of a warped alpha.
+
+    The far edge and the top edge of the face are the silhouette itself (no wall there), so the
+    rounded corner between them is the painted card's real corner.  Radius from the 45-degree cut:
+    a circular corner of radius r leaves r(sqrt2 - 1) between the sharp corner and the arc."""
+    h, w = alpha.shape
+    a = alpha > 0.5
+    col = a[:, w // 2]; row = a[h // 2]
+    if not col.any() or not row.any():
+        return None
+    top = np.argmax(col)                       # first opaque row at mid-width
+    right = w - 1 - np.argmax(row[::-1])       # last opaque column at mid-height
+    for k in range(0, min(h, w) // 3):
+        y, x = top + k, right - k
+        if 0 <= y < h and 0 <= x < w and a[y, x]:
+            return (k * np.sqrt(2) / (np.sqrt(2) - 1)) / ss
+    return None
+
+
+def render(d, lines, radius=None):
     rgba, side = d['rgba'], d['side']
     corners = corners_of(lines)
     rgb = bleed(rgba[..., :3], rgba[..., 3])
     src = Image.fromarray((np.clip(rgb, 0, 1) * 255 + .5).astype(np.uint8), 'RGB')
     quad = inset_quad(corners, INSET)
     SS = 2
-    big = src.transform((FACE_W * SS, FACE_H * SS), Image.PERSPECTIVE,
-                        perspective_coeffs([tuple(p) for p in quad], (FACE_W * SS, FACE_H * SS)),
-                        resample=Image.BICUBIC)
+    coef = perspective_coeffs([tuple(p) for p in quad], (FACE_W * SS, FACE_H * SS))
+    big = src.transform((FACE_W * SS, FACE_H * SS), Image.PERSPECTIVE, coef, resample=Image.BICUBIC)
+    asrc = Image.fromarray((np.clip(rgba[..., 3], 0, 1) * 255 + .5).astype(np.uint8), 'L')
+    abig = np.asarray(asrc.transform((FACE_W * SS, FACE_H * SS), Image.PERSPECTIVE, coef, resample=Image.BILINEAR)).astype(np.float32) / 255
+    art_r = corner_radius(abig, SS)
     face = big.resize((FACE_W, FACE_H), Image.LANCZOS)
     if side == 'right':
         face = face.transpose(Image.FLIP_LEFT_RIGHT)
@@ -351,9 +411,14 @@ def render(d, lines):
         arr[bw0:bw1, int(FACE_W * .2):int(FACE_W * .8)].reshape(-1, 3),
     ])
     rim = np.median(band, axis=0)
-    out = face.convert('RGBA')
-    out.putalpha(rounded_mask(FACE_W, FACE_H, int(RADIUS * FACE_W)))
-    return dict(face=out, corners=corners, rim='#%02x%02x%02x' % tuple(int(round(c)) for c in rim))
+    r_px = int(round((radius if radius is not None else RADIUS) * FACE_W))
+    # The written texture is OPAQUE: the 3D face geometry (same rounded outline) defines the shape.
+    # An alpha cut-out (alphaTest) aliased the corners and let transparent texels bleed dark
+    # colour into the edge at small mip levels.
+    face = edge_extend(face, r_px, EDGE_BAND)
+    shown = face.convert('RGBA')
+    shown.putalpha(rounded_mask(FACE_W, FACE_H, r_px))
+    return dict(face=face, shown=shown, corners=corners, rim='#%02x%02x%02x' % tuple(int(round(c)) for c in rim), art_r=art_r)
 
 
 def debug_tile(name, d, r, note):
@@ -371,7 +436,7 @@ def debug_tile(name, d, r, note):
             dr.point((x * s, y * s), fill=col)
     TL, TR, BL, BR = r['corners']
     dr.line([tuple(TL * s), tuple(TR * s), tuple(BR * s), tuple(BL * s), tuple(TL * s)], fill=(255, 255, 255), width=1)
-    face = r['face'].resize((int(FACE_W * 380 / FACE_H), 380), Image.LANCZOS)
+    face = r['shown'].resize((int(FACE_W * 380 / FACE_H), 380), Image.LANCZOS)
     fb = Image.new('RGBA', face.size, (40, 170, 80, 255)); fb.alpha_composite(face)
     tile = Image.new('RGB', (bg.width + fb.width + 6, 400), (25, 25, 30))
     tile.paste(bg, (0, 0)); tile.paste(fb.convert('RGB'), (bg.width + 6, 0))
@@ -422,7 +487,7 @@ def main():
         med2[side] = (float(np.median([final_off[k][0] for k in ks])), float(np.median([final_off[k][1] for k in ks])))
         print(f'{side}: refined wall near {med2[side][0]:.4f} w  bottom {med2[side][1]:.4f} h')
     os.makedirs(OUT, exist_ok=True)
-    meta, tiles = {}, []
+    meta, tiles, radii = {}, [], []
     for key, side, p in files:
         if args.words and key not in args.words:
             continue
@@ -440,12 +505,18 @@ def main():
         note = f"wall {on3:.3f}/{ob3:.3f}" + (' FIXn' if fix_n else '') + (' FIXb' if fix_b else '')
         note += (' RESETn' if out_n else '') + (' RESETb' if out_b else '')
         note += ' | ' + ' '.join(f'{s1:+d}/{s2:+d}' if isinstance(s1, int) else 'R' for (_, s1, _, s2, _) in log)
-        print(f"{key:14s} {d['size'][0]:4d}x{d['size'][1]:<4d} {note} rim {r['rim']}")
+        ar = r['art_r'] / FACE_W if r['art_r'] else float('nan')
+        radii.append((key, ar))
+        print(f"{key:14s} {d['size'][0]:4d}x{d['size'][1]:<4d} {note} rim {r['rim']} art-r {ar:.4f}")
         meta[key] = dict(rim=r['rim'])
         if not args.no_write:
             r['face'].save(os.path.join(OUT, f'{key}.webp'), 'WEBP', quality=90, method=6)
         if args.debug:
             tiles.append(debug_tile(key, d, r, note))
+    rs = np.array([v for _, v in radii if v == v])
+    if len(rs):
+        print(f'art corner radius (fraction of face width): median {np.median(rs):.4f}  '
+              f'p10 {np.percentile(rs, 10):.4f}  p90 {np.percentile(rs, 90):.4f}  (mask uses {RADIUS})')
     if args.debug and tiles:
         os.makedirs(args.debug, exist_ok=True)
         per_row = 4

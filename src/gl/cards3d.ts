@@ -13,10 +13,32 @@ import { cardShadowTexture, dotTexture, hazeTexture } from './textures';
 // Slab size in 2D-card units (Phaser draws the card 200 x 268 before its scale).
 const FW = 184;
 const FH = FW / FACE_ASPECT;          // 245
-const THICK = 46;
-const BEV = 8;
-const YAW = THREE.MathUtils.degToRad(24);     // left cards face right, right cards face left (as in the art)
-const PITCH = THREE.MathUtils.degToRad(-8);   // top leans back a little: the bottom wall shows, like the art
+const D2R = Math.PI / 180;
+/**
+ * Card pose, measured against the line of sight from the resting camera (not world axes), so every
+ * card shows the same pose wherever it sits on screen - like the art, where all left cards show the
+ * same left wall.  yaw: turn toward the screen centre; pitch: top leans back (bottom wall shows);
+ * roll: share of the 2D layout's tilt, applied in SCREEN space like the 2D game rotates its images.
+ * Test hook: ?pose=yaw,pitch,roll  and  WM3D.cards.pose (live).
+ */
+export const pose = (() => {
+  // fitted to the baked art (tools/qa/pose_fit.py): visible near wall 0.16 of the face width, bottom wall
+  // 0.05 of its height, edges leaning ~5.5 deg, face aspect 0.69 - the art: 0.152 / 0.048 / 6.7 / 0.681
+  const p = { yaw: 28, pitch: 10, roll: 1, thick: 30, world: false };
+  const q = new URLSearchParams(location.search).get('pose');
+  if (q) {
+    const [y, pi, r, th] = q.split(',').map(Number);
+    if (Number.isFinite(y)) p.yaw = y;
+    if (Number.isFinite(pi)) p.pitch = pi;
+    if (Number.isFinite(r)) p.roll = r;
+    if (Number.isFinite(th) && th >= 12 && th <= 80) p.thick = th;
+  }
+  return p;
+})();
+const THICK = pose.thick;                      // slab thickness in card units (face 184 wide)
+const BEV = Math.round(THICK * 0.17);
+// legacy world-axis pose (first slice), kept only to compare in tests: WM3D.cards.pose.world = true
+const YAW_W = 24 * D2R, PITCH_W = -8 * D2R;
 
 export type Side = 'left' | 'right';
 /** Test hook: ?cal turns every card square to the camera (light calibration against the art). */
@@ -26,15 +48,27 @@ type Pointer = { x: number; y: number; down: boolean } | null;
 /** Travel arrival: fly from `from` (world) to the card's slot, starting at travel-clock `at` (s). */
 type Arrival = { from: THREE.Vector3; at: number; dur: number };
 const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3);
+/**
+ * Material settings for things that sit BEHIND a card (drop shadow, hint halo): blended, but drawn in
+ * the opaque pass (renderOrder -1: after the backdrop, before every card). A card turned away from the
+ * camera reaches behind these planes; drawn in the transparent pass they then painted over the card's
+ * far side (a translucent band / cut-off corner). Custom blending keeps the alpha (no OPAQUE define).
+ */
+const BEHIND_CARDS = {
+  transparent: false, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+} as const;
 
+/** Rounded rectangle with CIRCULAR corners - the same outline as the face texture (unwarp_cards.py
+ *  draws circular arcs), so the textured face, the slab cap and the bevel all share one corner. */
 function roundedRect(w: number, h: number, r: number) {
   const s = new THREE.Shape();
-  const x = -w / 2, y = -h / 2;
+  const x = -w / 2, y = -h / 2, q = Math.PI / 2;
   s.moveTo(x + r, y);
-  s.lineTo(x + w - r, y); s.quadraticCurveTo(x + w, y, x + w, y + r);
-  s.lineTo(x + w, y + h - r); s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  s.lineTo(x + r, y + h); s.quadraticCurveTo(x, y + h, x, y + h - r);
-  s.lineTo(x, y + r); s.quadraticCurveTo(x, y, x + r, y);
+  s.lineTo(x + w - r, y); s.absarc(x + w - r, y + r, r, -q, 0, false);
+  s.lineTo(x + w, y + h - r); s.absarc(x + w - r, y + h - r, r, 0, q, false);
+  s.lineTo(x + r, y + h); s.absarc(x + r, y + h - r, r, q, 2 * q, false);
+  s.lineTo(x, y + r); s.absarc(x + r, y + r, r, 2 * q, 3 * q, false);
   return s;
 }
 
@@ -60,7 +94,8 @@ class Card3D {
   readonly shadow: THREE.Mesh;
   ready = false;
   z = new Spring(0, 120, 0.8);
-  yaw: Spring; pitch = new Spring(PITCH); roll = new Spring(0, 200, 0.8);
+  // springs hold the pose RELATIVE to the line of sight (rotation.y / rotation.x terms) + screen roll
+  yaw: Spring; pitch = new Spring(-pose.pitch * D2R); roll = new Spring(0, 200, 0.8);
   px = NaN; py = NaN; vx = 0; vy = 0;
   phase = Math.random() * 100;
   hintUntil = 0; hintStart = 0;
@@ -73,8 +108,10 @@ class Card3D {
     const key = `${side}_${word}`;
     const rim = CARD_FACES[key]?.rim ?? '#e8e0f0';
     this.bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(rim).multiplyScalar(0.9), roughness: 0.7, metalness: 0 });
+    // the face texture is opaque (rim colour carried past the outline); the rounded face geometry is
+    // the cut-out, so the corners are antialiased geometry edges, not aliased alphaTest steps
     this.faceMat = new THREE.MeshStandardMaterial({
-      map: tex, roughness: 0.78, metalness: 0, alphaTest: 0.5,
+      map: tex, roughness: 0.78, metalness: 0,
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4,
     });
     const body = new THREE.Mesh(geo.body, this.bodyMat);
@@ -82,12 +119,12 @@ class Card3D {
     face.position.z = THICK / 2 + 0.05;
     this.spin.add(body, face);
     // soft drop shadow on the 'air' behind the card: light comes from the upper right
-    this.shadowMat = new THREE.MeshBasicMaterial({ map: shadow.tex, color: 0x24104a, transparent: true, opacity: 0.3, depthWrite: false, toneMapped: false });
+    this.shadowMat = new THREE.MeshBasicMaterial({ map: shadow.tex, color: 0x24104a, opacity: 0.3, depthWrite: false, toneMapped: false, ...BEHIND_CARDS });
     this.shadow = new THREE.Mesh(geo.plane, this.shadowMat);
     this.shadow.scale.set(FW * shadow.sx, FH * shadow.sy, 1);
     this.shadow.renderOrder = -1;
     this.root.add(this.shadow, this.spin);
-    this.yaw = new Spring(side === 'left' ? YAW : -YAW);
+    this.yaw = new Spring((side === 'left' ? 1 : -1) * pose.yaw * D2R);
   }
 
   setOpacity(a: number) {
@@ -125,6 +162,12 @@ export class Cards3D {
   traveling: () => boolean = () => false;
   private ctrl = new THREE.Vector3();
   private to = new THREE.Vector3();
+  readonly pose = pose;
+  private eul = new THREE.Euler(0, 0, 0, 'YXZ');
+  private qBase = new THREE.Quaternion();
+  private qRoll = new THREE.Quaternion();
+  private axis = new THREE.Vector3();
+  private yAxis = new THREE.Vector3(0, 1, 0);
 
   constructor(private stage: Stage) {
     stage.scene.add(this.group);
@@ -185,9 +228,10 @@ export class Cards3D {
     if (!c.hint) {
       const g = new THREE.Group();
       const halo = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
-        map: this.haze, color: 0xffee33, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+        map: this.haze, color: 0xffee33, depthWrite: false, toneMapped: false, ...BEHIND_CARDS, blendDst: THREE.OneFactor,
       }));
       halo.position.z = -THICK;
+      halo.renderOrder = -1;
       halo.scale.setScalar(Math.max(FW, FH) * 2.4);
       halo.name = 'halo';
       g.add(halo);
@@ -251,30 +295,43 @@ export class Cards3D {
     }
     c.px = card.x; c.py = card.y;
     const sign = c.side === 'left' ? 1 : -1;
-    let yawT = dragging || inZone ? 0 : sign * YAW;
-    let pitchT = inZone ? 0 : dragging ? -0.04 : PITCH;
-    let rollT = inZone ? 0 : -card.rotation;
+    // relative pose targets: rotation.y (+ turns the face right), rotation.x (+ tilts the face down)
+    let yawT = sign * (dragging ? 0 : inZone ? 8 : pose.yaw) * D2R;
+    let pitchT = -(dragging ? 2 : inZone ? 0 : pose.pitch) * D2R;
+    let rollT = inZone ? 0 : -card.rotation * pose.roll;
     if (!dragging) {
-      yawT += Math.sin(t * 0.55 + c.phase) * 0.04;
-      pitchT += Math.sin(t * 0.43 + c.phase * 1.3) * 0.03;
+      yawT += Math.sin(t * 0.55 + c.phase) * 0.025;
+      pitchT += Math.sin(t * 0.43 + c.phase * 1.3) * 0.02;
     }
     if (hovered && pointer) {
       const s = card.scaleX || 1;
       const dx = THREE.MathUtils.clamp((pointer.x - card.x) / (FW * 0.6 * s), -1, 1);
       const dy = THREE.MathUtils.clamp((pointer.y - card.y) / (FH * 0.6 * s), -1, 1);
-      yawT += dx * 0.24;
-      pitchT += dy * 0.2;
+      yawT += dx * 0.14;
+      pitchT += dy * 0.1;
     }
     if (dragging) {
-      yawT += THREE.MathUtils.clamp(-c.vx / 1800, -1, 1) * 0.45;
-      pitchT += THREE.MathUtils.clamp(c.vy / 1800, -1, 1) * 0.38;
-      rollT += THREE.MathUtils.clamp(-c.vx / 2400, -1, 1) * 0.18;
+      yawT += THREE.MathUtils.clamp(-c.vx / 1800, -1, 1) * 0.35;
+      pitchT += THREE.MathUtils.clamp(c.vy / 1800, -1, 1) * 0.3;
+      rollT += THREE.MathUtils.clamp(-c.vx / 2400, -1, 1) * 0.12;
     }
     if (debug.front) { yawT = 0; pitchT = 0; rollT = 0; }
     const zT = dragging ? 120 : inZone ? 46 : hovered ? 30 : 0;
     const z = c.z.step(zT, sdt);
-    c.spin.rotation.set(c.pitch.step(pitchT, sdt), c.yaw.step(yawT, sdt), c.roll.step(rollT, sdt), 'YXZ');
+    const relY = c.yaw.step(yawT, sdt), relX = c.pitch.step(pitchT, sdt), roll = c.roll.step(rollT, sdt);
     this.stage.toWorld(card.x, card.y, z, c.root.position);
+    const P = c.root.position, D = this.stage.dist;
+    if (pose.world && !debug.front) {
+      c.spin.rotation.set(PITCH_W + (relX + pose.pitch * D2R), sign * YAW_W + (relY - sign * pose.yaw * D2R), roll, 'YXZ');
+    } else {
+      // line of sight from the resting camera (0, 0, D): parallax orbits must not re-aim the cards
+      const viewY = Math.atan2(-P.x, D - P.z);
+      const viewX = Math.atan2(P.y, Math.hypot(P.x, D - P.z));
+      this.qBase.setFromEuler(this.eul.set(viewX + relX, viewY + relY, 0, 'YXZ'));
+      this.axis.set(-P.x, -P.y, D - P.z).normalize();
+      this.qRoll.setFromAxisAngle(this.axis, roll);
+      c.spin.quaternion.multiplyQuaternions(this.qRoll, this.qBase);
+    }
     const sc = (card.scaleX + card.scaleY) / 2 || 1;
     c.root.scale.set(card.scaleX, card.scaleY, sc);
     c.root.visible = card.visible && c.ready;
@@ -320,7 +377,8 @@ export class Cards3D {
       u * u * a.from.y + 2 * u * e * this.ctrl.y + e * e * to.y,
       u * u * a.from.z + 2 * u * e * this.ctrl.z + e * e * to.z,
     );
-    c.spin.rotation.y += u * Math.PI * 2 * (c.side === 'left' ? -1 : 1);
+    this.qRoll.setFromAxisAngle(this.yAxis, u * Math.PI * 2 * (c.side === 'left' ? -1 : 1));
+    c.spin.quaternion.multiply(this.qRoll);
     const fade = Math.min(1, p / 0.12);
     c.setOpacity(Math.min(c.faceMat.opacity, fade));
     c.shadowMat.opacity *= e * e;
