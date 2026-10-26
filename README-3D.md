@@ -17,6 +17,11 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
   - `src/gl/zone3d.ts` — Gravity Zone: 깔때기(중력 우물)·자이로 링·나선 입자·네온 글자
   - `src/gl/travel.ts` — 라운드 사이 공간 이동: 정답 후 카메라가 존을 지나 배경의 아치 게이트로 날아감(속도선·플래시) → 다음 카드들이 게이트에서 날아와 자리에 앉음. 이동 중에는 입력을 막는다. 움직임 줄이기(reduced motion) 설정이면 원래처럼 옆에서 미끄러져 들어온다.
   - `src/gl/index.ts` — 품질 단계(high/mid/low), 느리면 단계 하향, 최후에는 2D로 복귀
+  - `src/gl/glee.ts` — 튜터 캐릭터 글리(Glee, 캐릭터 시트 기준). 몸통·팔·다리를 거리장(SDF)으로 만들어 셰이더에서 레이마칭하고 부드럽게 합쳐서 이음새가 없다. 얼굴(눈·입·볼터치·눈썹·눈물)은 셰이더로 그리고, 글리터는 몸 안의 반짝이 점들이다.
+    - 자리: 둥근 무대 왼쪽 앞(디자인 좌표 1280x720 기준 발 위치 445, 640 / 키 125). 카드·결과 카드·버튼과 겹치지 않는 자리이고, 가운데를 보도록 살짝 돌아서 있다.
+    - 고정 카메라로 그리는 오버레이 단계(`stage.overlay`)에 있어서 패럴랙스나 공간 이동 중에도 화면의 같은 자리에 있다.
+    - 반응: 시작 인사(손 흔들기), 카드를 잡으면 그 카드를 봄, 존에 넣으면 끄덕, 오답이면 슬픔(눈물·땀방울) 후 격려, 정답이면 환호(점프·하트·별), 힌트를 누르면 정답 카드를 차례로 가리킴, 공간 이동 때 점프, 마지막 화면에서 계속 환호.
+    - 2D 모드(`?q=2d`, 느린 기기 폴백)에는 나오지 않는다.
 - 배경 깊이: `tools/build_depth.py`가 배경 그림의 깊이 지도(Depth Anything V2 Small, 로컬 CPU)를 만들어 `public/gl/bg_depth.png`에 저장 → 배경이 입체 부조가 되어 카메라가 움직이면 시차가 생긴다(정지 화면은 원본과 똑같다).
   - 실행: `uv run --with torch --with transformers --with pillow --with numpy python tools/build_depth.py`
 - 카드 앞면: `tools/unwarp_cards.py`가 원본 카드 그림(기울기·두께가 그려진 PNG)에서 앞면만 찾아 정면으로 편다 → `public/gl/cards/*.webp`, `src/gl/cardFaces.ts`.
@@ -28,3 +33,4 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
 - `?fps` 프레임 표시
 - `?cal` 카드를 정면으로 고정(조명 보정용)
 - `?pose=돌림,젖힘,화면기울기비율,두께` 카드 각도 비교용 (예: `?pose=28,10,1,30`)
+- `?glee=off` 글리 끄기

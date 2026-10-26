@@ -5,6 +5,7 @@ import Phaser from 'phaser';
 import { WordCard } from '../objects/WordCard';
 import { CARD_FACES } from './cardFaces';
 import { Cards3D, type LiveCard } from './cards3d';
+import { Glee } from './glee';
 import { GATE_UV, Stage, type Quality } from './stage';
 import { DEPART, Travel } from './travel';
 import { Zone3D } from './zone3d';
@@ -39,6 +40,8 @@ const state = {
   cards: null as Cards3D | null,
   zone: null as Zone3D | null,
   travel: null as Travel | null,
+  /** the tutor character (off with ?glee=off) */
+  glee: null as Glee | null,
   /** hide Phaser's cards while the camera is in flight (they wait at their slots) */
   travelHide: false,
   scene: null as Any,
@@ -100,6 +103,30 @@ const containerWillRender = Phaser.GameObjects.Container.prototype.willRender;
   return containerWillRender.call(this, cam);
 };
 
+// Glee reacts to the player: grabbing a card, dropping it into the zone.
+const cardStartDrag = WordCard.prototype.startDrag;
+(WordCard.prototype as Any).startDrag = function (this: WordCard, ...args: Any[]) {
+  if (state.on) state.glee?.react('grab');
+  return (cardStartDrag as Any).apply(this, args);
+};
+const cardSnap = WordCard.prototype.snapToZone;
+(WordCard.prototype as Any).snapToZone = function (this: WordCard, ...args: Any[]) {
+  if (state.on) state.glee?.react('snap');
+  return (cardSnap as Any).apply(this, args);
+};
+
+/** Run `before` ahead of a scene method (once per scene instance; restarts reuse the instance). */
+function wrapOnce(scene: Any, name: string, before: () => void) {
+  const orig = scene[name];
+  if (typeof orig !== 'function' || orig.__wm3d) return;
+  const wrapped = function (...args: Any[]) {
+    try { if (state.on) before(); } catch (err) { console.warn('[wm3d]', err); }
+    return orig.apply(scene, args);
+  };
+  (wrapped as Any).__wm3d = true;
+  scene[name] = wrapped;
+}
+
 function attach(scene: Any) {
   state.scene = scene;
   for (const o of [...state.hidden]) if (!o.scene) state.hidden.delete(o);
@@ -123,7 +150,7 @@ function attach(scene: Any) {
     const wrapped = function (this: Any) {
       const afterWin = scene.roundIndex > 0;          // create() resets it to 0 before round 1
       startRound.call(scene);
-      if (afterWin && state.on && state.travel && !reducedMotion()) beginTravel(scene);
+      if (afterWin && state.on && state.travel && !reducedMotion()) { beginTravel(scene); state.glee?.react('whee'); }
     };
     (wrapped as Any).__wm3d = true;
     scene.startRound = wrapped;
@@ -132,9 +159,17 @@ function attach(scene: Any) {
   scene.showHint = () => showHint3D(scene);
   const impact = scene.playImpact;
   if (!impact.__wm3d) {
-    const wrapped = function (this: Any) { state.zone?.pulse(); return impact.call(scene); };
+    const wrapped = function (this: Any) { state.zone?.pulse(); state.glee?.react('cheer'); return impact.call(scene); };
     (wrapped as Any).__wm3d = true;
     scene.playImpact = wrapped;
+  }
+  wrapOnce(scene, 'onWrongMatch', () => state.glee?.react('wrong'));
+  wrapOnce(scene, 'triggerCollision', () => state.glee?.react('match'));
+  wrapOnce(scene, 'showFinale', () => state.glee?.react('finale'));
+  if (state.glee) {
+    state.glee.reset();
+    state.glee.reduced = reducedMotion();
+    state.glee.react('hello');
   }
 }
 
@@ -182,6 +217,15 @@ function showHint3D(scene: Any) {
     state.cards?.hint(card);
     scene.tweens.add({ targets: card, scaleX: sx * 1.14, scaleY: sy * 1.14, duration: 200, ease: 'Back.easeOut', yoyo: true, repeat: 2 });
   });
+  const targets = [correctL, correctR].filter((c: Any) => c?.active).map((c: Any) => ({ x: c.x, y: c.y }));
+  if (targets.length) state.glee?.react('hint', targets);
+}
+
+/** Glee's spot: the left front of the round stage, under the week/base cards and left of the
+ *  result card, just above the Replay/Mic buttons (design canvas 1280x720, like GameScene). */
+function placeGlee(s: Any) {
+  const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy);
+  state.glee!.place(445 * sx, 640 * sy, 125 * su, 0.36);
 }
 
 function frame(game: Phaser.Game) {
@@ -207,6 +251,12 @@ function frame(game: Phaser.Game) {
   const pxPerUnit = stage.renderer.domElement.height / 2 / Math.tan((stage.camera.fov * Math.PI) / 360);
   state.zone!.update(t, dt, s.zoneGfx?.alpha ?? 1, pxPerUnit);
   state.travel!.update(dt);
+  if (state.glee) {
+    placeGlee(s);
+    const d = s.dragCard;
+    state.glee.dragTarget = d?.active ? { x: d.x, y: d.y } : null;
+    state.glee.update(dt);
+  }
   stage.render(t, dt);
   monitor(dt);
   fpsMeter(dt);
@@ -231,6 +281,7 @@ function monitor(dt: number) {
     if (next === '2d') { giveUp(`slow (median frame ${(med * 1000).toFixed(0)} ms at low)`); return; }
     state.mode = next;
     state.stage!.setQuality(next);
+    state.glee?.setQuality(next);
     state.sinceSwitch = 0;
     remember(next);
     console.info('[wm3d] quality ->', next, `(median frame ${(med * 1000).toFixed(0)} ms)`);
@@ -242,6 +293,7 @@ function monitor(dt: number) {
       const up: Mode = state.mode === 'low' ? 'mid' : 'high';
       state.mode = up;
       state.stage!.setQuality(up);
+      state.glee?.setQuality(up);
       state.sinceSwitch = 0;
       state.upWindows = 0;
       remember(up);
@@ -260,6 +312,8 @@ function giveUp(reason: string) {
   if (state.scene) state.scene.busy = false;
   unhideAll();
   state.cards?.clear();
+  state.glee?.dispose();
+  state.glee = null;
   state.stage?.dispose();
   state.stage = null;
   // 2D only for this tab session; the next visit tries 3D again (at low after a slow give-up)
@@ -302,6 +356,7 @@ export function start3D(game: Phaser.Game) {
       state.cards.clock = () => travel.elapsed();
       state.cards.traveling = () => travel.active;
       state.zone.clock = () => travel.elapsed();
+      if (new URLSearchParams(location.search).get('glee') !== 'off') state.glee = new Glee(stage);
       // depth relief for the backdrop (the flight parallax); flat until it loads
       const depth = new Image();
       depth.onload = () => state.stage?.setDepth(depth);

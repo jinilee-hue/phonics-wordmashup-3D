@@ -25,6 +25,10 @@ export class Stage {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
+  /** Drawn after the world with a FIXED camera (the rest pose): characters that must not move with
+   *  the parallax or the flights between rounds (Glee). Depth is cleared first, so it sits on top. */
+  readonly overlay = new THREE.Scene();
+  readonly overlayCam: THREE.PerspectiveCamera;
   readonly key: THREE.DirectionalLight;
   readonly hemi: THREE.HemisphereLight;
   readonly canvas: HTMLCanvasElement;
@@ -57,6 +61,7 @@ export class Stage {
 
     this.camera = new THREE.PerspectiveCamera(FOV, 16 / 9, 10, 8000);
     this.scene.add(this.camera);          // camera-space layers (flash, speed lines) hang off it
+    this.overlayCam = new THREE.PerspectiveCamera(FOV, 16 / 9, 10, 8000);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -156,8 +161,12 @@ export class Stage {
     this.layout();
   }
 
+  private sized = false;
   resize(W: number, H: number) {
-    if (W === this.W && H === this.H && this.canvas.width) return;
+    // (comparing with the defaults alone skipped the first resize at exactly 1280x720: the canvas
+    // stayed 300x150 and the 3D scene filled a quarter of the screen)
+    if (this.sized && W === this.W && H === this.H) return;
+    this.sized = true;
     this.W = W; this.H = H;
     this.renderer.setSize(W, H, false);
     this.canvas.style.width = `${W}px`;
@@ -171,6 +180,11 @@ export class Stage {
     this.dist = (H / 2) / Math.tan(THREE.MathUtils.degToRad(FOV / 2));
     this.camera.far = this.dist * (D_FAR + 2);
     this.camera.updateProjectionMatrix();
+    this.overlayCam.aspect = W / H;
+    this.overlayCam.far = this.dist * 3;
+    this.overlayCam.position.set(0, 0, this.dist);
+    this.overlayCam.lookAt(0, 0, 0);
+    this.overlayCam.updateProjectionMatrix();
     // backdrop: object-fit cover at its reference depth, like the 2D game, plus a parallax margin
     if (this.bg) {
       const k = (this.dist - BG_Z) / this.dist;
@@ -229,6 +243,15 @@ export class Stage {
       this.camera.clearViewOffset();
     }
     this.renderer.render(this.scene, this.camera);
+    if (this.overlay.children.length) {
+      const oc = this.overlayCam;
+      if (this.shake.lengthSq() > 0) oc.setViewOffset(this.W, this.H, -this.shake.x, -this.shake.y, this.W, this.H);
+      else if (oc.view?.enabled) oc.clearViewOffset();
+      this.renderer.autoClear = false;
+      this.renderer.clearDepth();
+      this.renderer.render(this.overlay, oc);
+      this.renderer.autoClear = true;
+    }
   }
 
   dispose() {
