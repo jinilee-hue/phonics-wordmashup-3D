@@ -181,7 +181,7 @@ export class Stage {
     this.camera.far = this.dist * (D_FAR + 2);
     this.camera.updateProjectionMatrix();
     this.overlayCam.aspect = W / H;
-    this.overlayCam.far = this.dist * 3;
+    this.overlayCam.far = this.dist * 8;       // Glee runs deep into the scene between rounds
     this.overlayCam.position.set(0, 0, this.dist);
     this.overlayCam.lookAt(0, 0, 0);
     this.overlayCam.updateProjectionMatrix();

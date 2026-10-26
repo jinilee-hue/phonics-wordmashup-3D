@@ -33,7 +33,7 @@ POSE_LIST = [
     ('격려(cheer up)', 'wrong', 2.2, {}),
     ('정답(cheer)', 'cheer', 0.25, {}),
     ('힌트(point)', 'hint', 0.6, {'targets': 'up'}),
-    ('이동(whee)', 'whee', 1.1, {}),
+    ('한 바퀴(twirl)', 'twirl', 0.27, {}),
 ]
 
 
@@ -84,7 +84,8 @@ async def main():
                     g.freezeAt = null; g.reset();
                     s.dragCard = extra.drag ? { active: true, x: 250, y: 120 } : null;
                     const targets = extra.targets ? [{ x: 230, y: 160 }, { x: 1050, y: 160 }] : undefined;
-                    if (act) g.react(act, targets);
+                    if (act === 'twirl') { g.twirlFrom = -0.5; g.play([{ kind: 'twirl', t0: g.t, dur: 0.6 }]); }
+                    else if (act) g.react(act, targets);
                     g.freezeAt = g.t + u + 1e-4;
                 }''', [act, u, extra])
                 await pg.wait_for_timeout(700)

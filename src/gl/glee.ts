@@ -8,8 +8,9 @@
 // flights between rounds never move it - it travels with the player.
 import * as THREE from 'three';
 import type { Quality, Stage } from './stage';
+import { DEPART } from './travel';
 
-export type GleeEvent = 'hello' | 'grab' | 'snap' | 'wrong' | 'match' | 'cheer' | 'hint' | 'whee' | 'finale';
+export type GleeEvent = 'hello' | 'grab' | 'snap' | 'wrong' | 'match' | 'cheer' | 'hint' | 'finale';
 type Pt = { x: number; y: number };
 
 // Proportions measured on the sheet's front view (height 1 = sole to crown): a round body 0.78 wide,
@@ -17,6 +18,17 @@ type Pt = { x: number; y: number };
 const SH_X = 0.31, SH_Y = 0.45;                        // shoulders, body space
 const BOX = { x: 0.84, y0: -0.03, y1: 1.22, z: 0.52 };  // ray-march bounds (covers squash + raised arms)
 const STEPS: Record<Quality, number> = { high: 80, mid: 64, low: 48 };
+const FOOT_L = new THREE.Vector3(-0.122, 0.08, 0.035), FOOT_R = new THREE.Vector3(0.122, 0.08, 0.035);
+const TUCK_L = new THREE.Vector3(-0.11, 0.15, 0.0), TUCK_R = new THREE.Vector3(0.11, 0.15, 0.0);
+// Between rounds Glee runs to the gate and comes back with the next cards (driven by the travel clock):
+// DEPART: turn to the gate, dash along the pink path to the zone, leap into the portal (fades in the flash)
+// ARRIVE: drop out of the portal, run back home facing the player; then a 360-degree twirl and a landing.
+const RUN_FREQ = 3.3;                     // leg cycles per second (two steps each)
+const YAW_IN = Math.PI - 0.5;             // back to the viewer, toward the portal
+const YAW_OUT = -0.5;                     // toward the viewer and home
+const S_FLOOR = 0.55, S_PORTAL = 0.3;     // perspective scale at the zone's foot / inside the portal
+const RUN_END = DEPART + 1.0;             // then the twirl act takes over (it outlives the travel)
+const PUFF_LIFE = 0.5;
 const GLITTER: Record<Quality, number> = { high: 140, mid: 96, low: 56 };
 
 const VS = /* glsl */ `
@@ -37,6 +49,8 @@ uniform vec3 uHandL;
 uniform vec3 uHandR;
 uniform vec3 uShL;
 uniform vec3 uShR;
+uniform vec3 uFootL;
+uniform vec3 uFootR;
 uniform vec3 uSquash;
 uniform vec2 uLook;
 uniform float uBlink, uHappy, uSad, uOpen, uFrown, uO, uBlush;
@@ -61,8 +75,8 @@ float torso(vec3 q) {
 float map(vec3 p) {
   vec3 q = p / uSquash;
   float b = torso(q);
-  float lg = min(sdRC(q, vec3(-0.115, 0.22, 0.02), vec3(-0.122, 0.08, 0.035), 0.085, 0.08),
-                 sdRC(q, vec3(0.115, 0.22, 0.02), vec3(0.122, 0.08, 0.035), 0.085, 0.08));
+  float lg = min(sdRC(q, vec3(-0.115, 0.22, 0.02), uFootL, 0.085, 0.08),
+                 sdRC(q, vec3(0.115, 0.22, 0.02), uFootR, 0.085, 0.08));
   b = smin(b, lg, 0.06);
   float ar = min(sdRC(q, uShL, uHandL, 0.088, 0.08), sdRC(q, uShR, uHandR, 0.088, 0.08));
   b = smin(b, ar, 0.05);
@@ -288,7 +302,10 @@ function ell(x: number, y: number, z: number, rx: number, ry: number, rz: number
 const torso = (x: number, y: number, z: number) =>
   smin(ell(x, y - 0.6, z, 0.39, 0.4, 0.33), ell(x, y - 0.38, z - 0.015, 0.385, 0.24, 0.32), 0.12);
 const clamp = THREE.MathUtils.clamp;
+const lerp = THREE.MathUtils.lerp;
+const lin = (a: number, b: number, x: number) => clamp((x - a) / (b - a), 0, 1);
 const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const easeInOut = (x: number) => x * x * (3 - 2 * x);
 
 function canvasTex(draw: (g: CanvasRenderingContext2D, s: number) => void, size = 96) {
   const c = document.createElement('canvas');
@@ -328,6 +345,12 @@ const sparkleTex = () => canvasTex((g, s) => {
   g.fillStyle = 'rgba(255,255,240,.95)';
   g.beginPath(); g.moveTo(c, 2); g.quadraticCurveTo(c, c, s - 2, c); g.quadraticCurveTo(c, c, c, s - 2); g.quadraticCurveTo(c, c, 2, c); g.quadraticCurveTo(c, c, c, 2); g.fill();
 });
+const puffTex = () => canvasTex((g, s) => {
+  const c = s / 2;
+  const gr = g.createRadialGradient(c, c, 0, c, c, c);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.4, 'rgba(246,238,255,.85)'); gr.addColorStop(0.75, 'rgba(196,170,255,.45)'); gr.addColorStop(1, 'rgba(170,140,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, s, s);
+}, 64);
 const shadowTex = () => canvasTex((g, s) => {
   const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
   gr.addColorStop(0, 'rgba(18,6,40,1)'); gr.addColorStop(0.55, 'rgba(18,6,40,.5)'); gr.addColorStop(1, 'rgba(18,6,40,0)');
@@ -346,6 +369,20 @@ const newPose = (): Pose => ({
   sy: 1, lean: 0, yaw: 0, happy: 0, sad: 0, open: 0.85, frown: 0, o: 0, blush: 1, lookX: 0, lookY: 0,
 });
 type Act = { kind: string; t0: number; dur: number; targets?: Pt[] };
+const mixArm = (a: Arm, b: Arm, k: number): Arm => ({ th: lerp(a.th, b.th, k), ph: lerp(a.ph, b.ph, k), len: lerp(a.len, b.len, k) });
+/** One drawn frame: where the feet touch the floor (game px) and how deep (scale 1 = at home), plus the body pose. */
+type Frame = {
+  gx: number; gy: number; scale: number;
+  jump: number; yaw: number; pitch: number; lean: number; sy: number;
+  armL: Arm; armR: Arm; footL: THREE.Vector3; footR: THREE.Vector3;
+  opacity: number;
+  shadow: { x: number; y: number; scale: number; a: number };
+};
+const newFrame = (): Frame => ({
+  gx: 0, gy: 0, scale: 1, jump: 0, yaw: 0, pitch: 0, lean: 0, sy: 1,
+  armL: { th: 0.95, ph: 0.1, len: 0.21 }, armR: { th: 0.95, ph: 0.1, len: 0.21 },
+  footL: FOOT_L.clone(), footR: FOOT_R.clone(), opacity: 1, shadow: { x: 0, y: 0, scale: 1, a: 1 },
+});
 type Fx = { s: THREE.Sprite; t0: number; life: number; x: number; y: number; vx: number; vy: number; size: number; spin: number };
 
 export class Glee {
@@ -356,7 +393,7 @@ export class Glee {
   private glitterGroup = new THREE.Group();
   private glitter: THREE.Points | null = null;
   private shadow: THREE.Mesh;
-  private tex = { heart: heartTex(), star: starTex(), drop: dropTex(), sparkle: sparkleTex(), shadow: shadowTex() };
+  private tex = { heart: heartTex(), star: starTex(), drop: dropTex(), sparkle: sparkleTex(), shadow: shadowTex(), puff: puffTex() };
   private fx: Fx[] = [];
   private wand: THREE.Sprite;
   private cur = newPose();
@@ -371,6 +408,22 @@ export class Glee {
   private hopsDone = 0;
   private home = { x: 0, y: 0, h: 120, yaw: 0.36 };
   private lastHand = new THREE.Vector3();
+  private portal = { x: 640, y: 380, r: 150 };
+  private running = false;
+  private runFrom = { yaw: 0.36, armL: { th: 0.95, ph: 0.1, len: 0.21 } as Arm, armR: { th: 0.95, ph: 0.1, len: 0.21 } as Arm };
+  private twirlFrom = 0;
+  private directYaw = false;
+  private F = newFrame();
+  private pf = newFrame();
+  private pfFace = newPose();
+  private puffs: THREE.Sprite[] = [];
+  private mtx = new THREE.Matrix4();
+  private qtn = new THREE.Quaternion();
+  private eul = new THREE.Euler(0, 0, 0, 'YXZ');
+  private v1 = new THREE.Vector3();
+  private v2 = new THREE.Vector3();
+  /** travel clock (s since the camera flight started) while a travel runs, else null; set by index.ts */
+  runClock: () => number | null = () => null;
   /** tests: pin the clock (s) and/or place Glee explicitly */
   freezeAt: number | null = null;
   override: { x: number; y: number; h: number; yaw?: number } | null = null;
@@ -386,6 +439,7 @@ export class Glee {
         uHi1: { value: new THREE.Vector3() }, uHi2: { value: new THREE.Vector3() },
         uHandL: { value: new THREE.Vector3() }, uHandR: { value: new THREE.Vector3() },
         uShL: { value: new THREE.Vector3(-SH_X, SH_Y, 0) }, uShR: { value: new THREE.Vector3(SH_X, SH_Y, 0) },
+        uFootL: { value: FOOT_L.clone() }, uFootR: { value: FOOT_R.clone() },
         uSquash: { value: new THREE.Vector3(1, 1, 1) }, uLook: { value: new THREE.Vector2() },
         uBlink: { value: 0 }, uHappy: { value: 0 }, uSad: { value: 0 }, uOpen: { value: 0.85 },
         uFrown: { value: 0 }, uO: { value: 0 }, uBlush: { value: 1 },
@@ -412,6 +466,12 @@ export class Glee {
     this.wand.renderOrder = 4;
     this.wand.visible = false;
     stage.overlay.add(this.shadow, this.root, this.wand);
+    for (let i = 0; i < 8; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex.puff, transparent: true, depthTest: false, depthWrite: false }));
+      sp.visible = false;
+      this.puffs.push(sp);
+      stage.overlay.add(sp);
+    }
     this.setQuality(stage.quality);
   }
 
@@ -455,6 +515,17 @@ export class Glee {
     this.home.x = x; this.home.y = y; this.home.h = h; this.home.yaw = yaw;
   }
 
+  /** The Gravity Zone (game px): the run goes along the floor to its foot, then into it. */
+  setPortal(x: number, y: number, r: number) {
+    this.portal.x = x; this.portal.y = y; this.portal.r = r;
+  }
+
+  /** World point (overlay camera) whose projection is game px (x, y), at the depth where things look `scale` x. */
+  private worldAt(x: number, y: number, scale: number, out: THREE.Vector3) {
+    const st = this.stage, k = 1 / scale;
+    return out.set((x - st.W / 2) * k, (st.H / 2 - y) * k, st.dist * (1 - k));
+  }
+
   /** Screen position (game px) of a point in body space. */
   private toScreen(v: THREE.Vector3): Pt {
     const w = this.root.localToWorld(v.clone());
@@ -472,12 +543,11 @@ export class Glee {
       case 'match': this.play([start('wow', 0.32)]); break;
       case 'cheer': this.play([start('cheer', 2.7)]); this.burst(); break;
       case 'hint': this.play([start('hint', 2.6, targets)]); break;
-      case 'whee': this.play([start('whee', 2.25), { kind: 'land', t0: now + 2.25, dur: 0.4 }]); break;
       case 'finale': this.play([start('finale', 1e9)]); this.burst(); break;
     }
   }
 
-  private busyAct() { return !!this.act && ['wrong', 'cheerup', 'wow', 'cheer', 'hint', 'whee', 'land', 'finale'].includes(this.act.kind); }
+  private busyAct() { return !!this.act && ['wrong', 'cheerup', 'wow', 'cheer', 'hint', 'twirl', 'land', 'finale'].includes(this.act.kind); }
 
   private play(acts: Act[]) {
     this.act = acts[0];
@@ -487,12 +557,15 @@ export class Glee {
 
   reset() {
     this.act = null; this.queue = [];
+    this.running = false;
+    for (const sp of this.puffs) sp.visible = false;
     for (const f of this.fx) { f.s.removeFromParent(); f.s.material.dispose(); }
     this.fx = [];
   }
 
   private targetPose(t: number, out: Pose) {
     const yaw0 = this.override?.yaw ?? this.home.yaw;
+    this.directYaw = false;
     // idle: breathe, sway, arms swing a little; eyes on the player
     out.armL = { th: 0.95 + 0.05 * Math.sin(t * 1.9), ph: 0.12, len: 0.21 };
     out.armR = { th: 0.95 + 0.05 * Math.sin(t * 1.9 + 1.4), ph: 0.12, len: 0.21 };
@@ -552,14 +625,18 @@ export class Glee {
         if (target) this.point(target, out);
         break;
       }
-      case 'whee': {
-        const up = smooth(0, 0.35, u) * (1 - smooth(a.dur - 0.3, a.dur, u));
-        jump = this.reduced ? 0 : up * (0.2 + 0.02 * Math.sin(u * 6));
-        out.armL = { th: 2.45, ph: 0.0, len: 0.28 }; out.armR = { th: 2.45, ph: 0.0, len: 0.28 };
-        out.happy = 1; out.open = 1; out.sy = 1 + 0.05 * up;
+      case 'twirl': {
+        // back home: one full turn on a little hop, arms out
+        const p = lin(0, a.dur, u);
+        out.yaw = lerp(this.twirlFrom, yaw0 + Math.PI * 2, easeInOut(p));
+        this.directYaw = true;
+        jump = 0.13 * Math.sin(Math.PI * p);
+        out.sy = 1 + 0.06 * Math.sin(Math.PI * p);
+        out.armL = { th: 1.75, ph: 0.0, len: 0.27 }; out.armR = { th: 1.75, ph: 0.0, len: 0.27 };
+        out.happy = 1; out.open = 1;
         break;
       }
-      case 'land': out.sy = 1 - 0.12 * Math.sin((Math.PI * u) / 0.4); out.happy = 1; break;
+      case 'land': out.sy = 1 - 0.12 * Math.sin((Math.PI * u) / a.dur); out.happy = 1; out.open = 1; break;
     }
     return jump;
   }
@@ -617,43 +694,184 @@ export class Glee {
     this.fx.push({ s, t0: this.t, life: 1.5, x: p.x, y: p.y, vx: 0, vy: this.home.h * 0.12, size: this.home.h * 0.22, spin: 0 });
   }
 
+  /** The run between rounds at travel time `u` (s): fills the frame and the face. Pure (puffs replay it). */
+  private runFrame(u: number, F: Frame, face: Pose) {
+    const H0 = this.home, C = this.portal, h = H0.h;
+    const fx = C.x, fy = C.y + C.r * 1.05;                  // the floor at the foot of the zone, in front of the gate
+    const yIn = C.y + 0.45 * h * S_PORTAL;                   // feet while floating inside the portal
+    const stride = (ph: number, amp: number, side: number, v: THREE.Vector3) =>
+      v.set(side * 0.122, 0.08 + 0.12 * amp * Math.max(0, Math.cos(ph)), 0.035 + 0.1 * amp * Math.sin(ph));
+    // arms pump up and down against the legs (readable from behind and from the front)
+    const swing = (ph: number, amp: number): [Arm, Arm] => [
+      { th: 0.95 - 0.45 * amp * Math.sin(ph), ph: -0.5 * amp * Math.sin(ph), len: 0.21 },
+      { th: 0.95 + 0.45 * amp * Math.sin(ph), ph: 0.5 * amp * Math.sin(ph), len: 0.21 },
+    ];
+    const up: Arm = { th: 2.5, ph: 0.05, len: 0.28 };
+    face.happy = 0; face.sad = 0; face.frown = 0; face.o = 0; face.blush = 1; face.open = 1; face.lookY = 0.1;
+    if (u < DEPART) {
+      const turn = easeInOut(lin(0, 0.16, u));               // 1) turn to the gate, crouch
+      const q = easeInOut(lin(0.1, 0.8, u));                 // 2) dash along the pink path to the zone
+      const l = lin(0.76, 1.03, u);                          // 3) leap into the portal
+      const ph = 2 * Math.PI * RUN_FREQ * Math.max(0, u - 0.1);
+      const amp = lin(0.08, 0.2, u) * (1 - lin(0.72, 0.8, u));
+      F.yaw = lerp(this.runFrom.yaw, YAW_IN, turn);
+      F.pitch = 0.28 * turn * (1 - 0.6 * l);
+      F.lean = 0.1 * amp * Math.sin(ph);
+      F.sy = 1 - 0.1 * Math.sin(Math.PI * lin(0.04, 0.16, u)) - 0.06 * amp * Math.cos(2 * ph);
+      const ready: Arm = { th: 0.7, ph: -0.35, len: 0.2 };    // arms back: about to dash
+      const b = lin(0, 0.12, u);
+      const [sL, sR] = swing(ph, amp);
+      const aL = mixArm(mixArm(this.runFrom.armL, ready, b), sL, amp), aR = mixArm(mixArm(this.runFrom.armR, ready, b), sR, amp);
+      F.armL = mixArm(aL, up, lin(0, 0.35, l)); F.armR = mixArm(aR, up, lin(0, 0.35, l));
+      stride(ph, amp, -1, F.footL); stride(ph + Math.PI, amp, 1, F.footR);
+      if (l > 0) { F.footL.lerp(TUCK_L, lin(0, 0.3, l)); F.footR.lerp(TUCK_R, lin(0, 0.3, l)); }
+      F.gx = lerp(H0.x, fx, q); F.gy = lerp(H0.y, fy, q);
+      F.scale = 1 / (1 + (1 / S_FLOOR - 1) * q);
+      F.jump = 0.06 * amp * Math.abs(Math.sin(ph));
+      if (l > 0) {
+        F.scale = lerp(S_FLOOR, S_PORTAL, l);
+        const y = lerp(fy, yIn, Math.sin((l * Math.PI) / 2)) - Math.sin(Math.PI * l) * 0.3 * h * F.scale;
+        F.jump = (fy - y) / (h * F.scale);
+      }
+      F.opacity = 1 - lin(0.93, 1.03, u);                    // gone into the flash
+      F.shadow.x = F.gx; F.shadow.y = F.gy; F.shadow.scale = l > 0 ? S_FLOOR : F.scale; F.shadow.a = 1 - lin(0, 0.6, l);
+      face.lookX = 0;
+    } else {
+      const a = u - DEPART;
+      const p = lin(0.06, 0.36, a);                          // 1) drop out of the portal to the floor
+      const q = 1 - Math.pow(1 - lin(0.33, 1.0, a), 2.2);    // 2) run home, slowing down at the end
+      const ph = 2 * Math.PI * RUN_FREQ * Math.max(0, a - 0.33);
+      const amp = lin(0.33, 0.42, a) * (1 - lin(0.86, 1.0, a));
+      F.yaw = lerp(0, YAW_OUT, easeInOut(lin(0.3, 0.45, a)));
+      F.pitch = 0.2 * amp;
+      F.lean = 0.1 * amp * Math.sin(ph);
+      F.sy = 1 - 0.06 * amp * Math.cos(2 * ph) - 0.12 * Math.sin(Math.PI * lin(0.33, 0.43, a));
+      const [sL, sR] = swing(ph, amp);
+      const k = lin(0.3, 0.42, a);
+      F.armL = mixArm(up, sL, k); F.armR = mixArm(up, sR, k);
+      stride(ph, amp, -1, F.footL); stride(ph + Math.PI, amp, 1, F.footR);
+      if (p < 1) { F.footL.lerp(TUCK_L, 1 - lin(0.7, 1, p)); F.footR.lerp(TUCK_R, 1 - lin(0.7, 1, p)); }
+      F.gx = lerp(fx, H0.x, q); F.gy = lerp(fy, H0.y, q);
+      F.scale = 1 / (1 + (1 / S_FLOOR - 1) * (1 - q));
+      F.jump = 0.06 * amp * Math.abs(Math.sin(ph));
+      if (p < 1) {
+        F.scale = lerp(S_PORTAL, S_FLOOR, p);
+        const y = lerp(yIn, fy, p * p) - Math.sin(Math.PI * p) * 0.25 * h * F.scale;
+        F.jump = (fy - y) / (h * F.scale);
+      }
+      F.opacity = lin(0.05, 0.15, a);                        // out of the flash
+      F.shadow.x = F.gx; F.shadow.y = F.gy; F.shadow.scale = p < 1 ? S_FLOOR : F.scale; F.shadow.a = lin(0.5, 1, p);
+      face.happy = a < 0.34 ? 1 : 0;                         // "^^" while popping out, then eyes on the player
+      face.lookX = clamp(-F.yaw * 1.3, -1, 1);
+    }
+  }
+
+  private frameMatrix(F: Frame, h: number, out: THREE.Matrix4) {
+    const pos = this.worldAt(F.gx, F.gy, F.scale, this.v1);
+    pos.y += F.jump * h;
+    this.qtn.setFromEuler(this.eul.set(F.pitch, F.yaw, F.lean, 'YXZ'));
+    return out.compose(pos, this.qtn, this.v2.set(h, h, h));
+  }
+
+  /** Dust puffs at every footfall of the run, replayed from the travel clock (so frozen frames show them). */
+  private drawPuffs(u: number | null) {
+    let n = 0;
+    if (u !== null) {
+      const h = this.home.h;
+      const legs: [number, number, number][] = [[0.1, 0.2, 0.74], [DEPART + 0.33, DEPART + 0.42, DEPART + 0.9]];
+      for (const [start, from, to] of legs) {
+        for (let k = 0; k < 14 && n < this.puffs.length; k++) {
+          const uk = start + (0.5 + k) / (2 * RUN_FREQ);     // a foot lands at phase pi/2 + k*pi
+          const age = u - uk;
+          if (uk < from || uk > to || age < 0 || age > PUFF_LIFE) continue;
+          this.runFrame(uk, this.pf, this.pfFace);
+          this.pf.jump = 0;
+          const foot = k % 2 === 0 ? this.pf.footL : this.pf.footR;
+          const sxz = 1 / Math.sqrt(this.pf.sy);
+          // a little outside the foot, so it peeks out beside the body once she has moved on
+          const w = new THREE.Vector3(foot.x * sxz * 1.7, 0.03, foot.z * sxz - 0.05).applyMatrix4(this.frameMatrix(this.pf, h, this.mtx));
+          const sp = this.puffs[n++];
+          const life = age / PUFF_LIFE;
+          sp.visible = true;
+          sp.position.copy(w);
+          sp.scale.setScalar(h * (0.22 + 0.32 * life));
+          sp.material.opacity = 0.95 * Math.pow(1 - life, 1.2) * this.pf.opacity;
+          sp.renderOrder = w.z > this.root.position.z ? 6 : 1;   // in front of Glee when she runs away from us
+        }
+      }
+    }
+    for (let i = n; i < this.puffs.length; i++) this.puffs[i].visible = false;
+  }
+
   update(dt: number) {
     const st = this.stage;
     this.t = this.freezeAt ?? this.t + dt;
     const t = this.t;
     this.root.visible = this.shadow.visible = this.visible;
-    if (!this.visible) return;
-    // acts: advance the queue, idle waves now and then
-    if (this.act && t - this.act.t0 >= this.act.dur) {
-      this.act = this.queue.shift() ?? null;
-      this.hopsDone = 0;
-      if (this.act) this.act.t0 = t;
-      else this.nextWave = Math.max(this.nextWave, t + 5);     // no idle wave right after a reaction
+    if (!this.visible) { this.drawPuffs(null); return; }
+    const c = this.cur, g = this.tgt, F = this.F;
+    const ru = this.runClock();
+    const run = ru !== null && ru < RUN_END && !this.reduced;
+    if (run && !this.running) {
+      this.running = true;
+      this.runFrom = { yaw: c.yaw, armL: { ...c.armL }, armR: { ...c.armR } };
+      this.act = null; this.queue = [];
+      this.wand.visible = false;
+    } else if (!run && this.running) {
+      this.running = false;
+      this.twirlFrom = c.yaw;
+      this.play([{ kind: 'twirl', t0: t, dur: 0.6 }, { kind: 'land', t0: t + 0.6, dur: 0.35 }]);
     }
-    if (!this.act && t > this.nextWave) { this.play([{ kind: 'wave', t0: t, dur: 1.8 }]); this.nextWave = t + 11 + Math.random() * 6; }
-    // pose: analytic target, then ease toward it (jump stays analytic)
     const P = this.override ?? this.home;
     const h = P.h;
-    this.jump = this.targetPose(t, this.tgt);
-    const c = this.cur, g = this.tgt;
-    const k = (r: number) => (this.freezeAt !== null ? 1 : 1 - Math.exp(-dt * r));
-    const ease = (a: number, b: number, r: number) => a + (b - a) * k(r);
-    for (const side of ['armL', 'armR'] as const) {
-      c[side] = { th: ease(c[side].th, g[side].th, 16), ph: ease(c[side].ph, g[side].ph, 16), len: ease(c[side].len, g[side].len, 16) };
+    if (this.running) {
+      this.runFrame(ru!, F, g);
+      // keep the eased pose in step, so the twirl starts exactly where the run ended
+      c.armL = { ...F.armL }; c.armR = { ...F.armR };
+      c.yaw = F.yaw; c.sy = F.sy; c.lean = F.lean;
+      for (const f of ['happy', 'sad', 'open', 'frown', 'o', 'blush', 'lookX', 'lookY'] as const) c[f] = g[f];
+      this.jump = F.jump;
+    } else {
+      // acts: advance the queue, idle waves now and then
+      if (this.act && t - this.act.t0 >= this.act.dur) {
+        this.act = this.queue.shift() ?? null;
+        this.hopsDone = 0;
+        if (this.act) this.act.t0 = t;
+        else this.nextWave = Math.max(this.nextWave, t + 5);     // no idle wave right after a reaction
+      }
+      if (!this.act && t > this.nextWave) { this.play([{ kind: 'wave', t0: t, dur: 1.8 }]); this.nextWave = t + 11 + Math.random() * 6; }
+      // pose: analytic target, then ease toward it (jump stays analytic)
+      this.jump = this.targetPose(t, g);
+      const k = (r: number) => (this.freezeAt !== null ? 1 : 1 - Math.exp(-dt * r));
+      const ease = (a: number, b: number, r: number) => a + (b - a) * k(r);
+      for (const side of ['armL', 'armR'] as const) {
+        c[side] = { th: ease(c[side].th, g[side].th, 16), ph: ease(c[side].ph, g[side].ph, 16), len: ease(c[side].len, g[side].len, 16) };
+      }
+      if (this.directYaw) c.yaw = g.yaw;
+      else {
+        const d = c.yaw - g.yaw;                                  // shortest way round (after a twirl: +2pi)
+        c.yaw = g.yaw + Math.atan2(Math.sin(d), Math.cos(d));
+        c.yaw = ease(c.yaw, g.yaw, 6);
+      }
+      c.sy = ease(c.sy, g.sy, 22); c.lean = ease(c.lean, g.lean, 10);
+      for (const f of ['happy', 'sad', 'open', 'frown', 'o', 'blush'] as const) c[f] = ease(c[f], g[f], 14);
+      c.lookX = ease(c.lookX, g.lookX, 12); c.lookY = ease(c.lookY, g.lookY, 12);
+      F.gx = P.x; F.gy = P.y; F.scale = 1; F.jump = this.jump;
+      F.yaw = c.yaw; F.pitch = 0; F.lean = c.lean; F.sy = c.sy;
+      F.armL = c.armL; F.armR = c.armR;
+      const tuck = this.act?.kind === 'twirl' ? clamp(this.jump / 0.13, 0, 1) : 0;
+      F.footL.copy(FOOT_L).lerp(TUCK_L, tuck * 0.7); F.footR.copy(FOOT_R).lerp(TUCK_R, tuck * 0.7);
+      F.opacity = 1;
+      F.shadow.x = P.x; F.shadow.y = P.y; F.shadow.scale = 1; F.shadow.a = 1;
     }
-    c.sy = ease(c.sy, g.sy, 22); c.lean = ease(c.lean, g.lean, 10); c.yaw = ease(c.yaw, g.yaw, 6);
-    for (const f of ['happy', 'sad', 'open', 'frown', 'o', 'blush'] as const) c[f] = ease(c[f], g[f], 14);
-    c.lookX = ease(c.lookX, g.lookX, 12); c.lookY = ease(c.lookY, g.lookY, 12);
     // blink every few seconds (not while the eyes are closed happily)
     let blink = 0;
     if (t > this.nextBlink) { this.blinkT0 = t; this.nextBlink = t + 2.2 + Math.random() * 3; }
     if (this.blinkT0 >= 0 && t - this.blinkT0 < 0.16) blink = Math.sin((Math.PI * (t - this.blinkT0)) / 0.16);
     if (this.freezeAt !== null) blink = 0;
-    // transform: feet on the stage, turned toward the centre
-    const sy = c.sy, sxz = 1 / Math.sqrt(sy);
-    this.root.position.set(P.x - st.W / 2, st.H / 2 - P.y + this.jump * h, 0);
-    this.root.scale.setScalar(h);
-    this.root.rotation.set(0, c.yaw, c.lean, 'YXZ');
+    // transform: feet on the floor (deeper = smaller), turned and leaning as the frame says
+    const sy = F.sy, sxz = 1 / Math.sqrt(sy);
+    this.frameMatrix(F, h, this.mtx).decompose(this.root.position, this.root.quaternion, this.root.scale);
     this.root.updateMatrixWorld(true);
     this.glitterGroup.scale.set(sxz, sy, sxz);
     // uniforms
@@ -664,23 +882,30 @@ export class Glee {
     (u.uLight.value as THREE.Vector3).set(-0.45, 0.75, 0.55).normalize().applyQuaternion(qi);
     (u.uHi1.value as THREE.Vector3).set(-0.5, 0.6, 0.62).normalize().applyQuaternion(qi);
     (u.uHi2.value as THREE.Vector3).set(0.62, 0.42, 0.66).normalize().applyQuaternion(qi);
-    this.arm(-1, c.armL, u.uShL.value, u.uHandL.value);
-    this.arm(1, c.armR, u.uShR.value, u.uHandR.value);
+    this.arm(-1, F.armL, u.uShL.value, u.uHandL.value);
+    this.arm(1, F.armR, u.uShR.value, u.uHandR.value);
+    (u.uFootL.value as THREE.Vector3).copy(F.footL);
+    (u.uFootR.value as THREE.Vector3).copy(F.footR);
     (u.uSquash.value as THREE.Vector3).set(sxz, sy, sxz);
     (u.uLook.value as THREE.Vector2).set(c.lookX, c.lookY);
     u.uBlink.value = blink * (1 - c.happy);
     u.uHappy.value = c.happy; u.uSad.value = c.sad; u.uOpen.value = c.open;
     u.uFrown.value = c.frown; u.uO.value = c.o; u.uBlush.value = c.blush;
     const dpr = st.renderer.getPixelRatio();
-    u.uPx.value = 1 / (h * dpr);
+    u.uPx.value = 1 / (h * dpr * F.scale);
     u.uTime.value = t;
+    u.uOpacity.value = F.opacity;
+    this.body.visible = F.opacity > 0.003;
     this.glitterMat.uniforms.uTime.value = t;
-    this.glitterMat.uniforms.uPxScale.value = (dpr * h) / 125;
+    this.glitterMat.uniforms.uPxScale.value = (dpr * h * F.scale) / 125;
+    this.glitterMat.uniforms.uOpacity.value = F.opacity;
     // shadow on the floor, smaller and lighter while airborne
-    const air = clamp(this.jump / 0.2, 0, 1);
-    this.shadow.position.set(P.x - st.W / 2, st.H / 2 - P.y - h * 0.01, 0);
+    const air = clamp(F.jump / 0.2, 0, 1);
+    this.worldAt(F.shadow.x, F.shadow.y, F.shadow.scale, this.shadow.position);
+    this.shadow.position.y -= h * 0.01;
     this.shadow.scale.set(h * 0.8 * (1 - 0.3 * air), h * 0.17 * (1 - 0.3 * air), 1);
-    (this.shadow.material as THREE.MeshBasicMaterial).opacity = 0.5 * (1 - 0.55 * air);
+    (this.shadow.material as THREE.MeshBasicMaterial).opacity = 0.5 * (1 - 0.55 * air) * F.shadow.a * F.opacity;
+    this.drawPuffs(this.running ? ru : null);
     // hint sparkle at the pointing hand
     const pointing = this.act?.kind === 'hint';
     this.wand.visible = pointing;
@@ -711,5 +936,6 @@ export class Glee {
     this.body.geometry.dispose(); this.glitter?.geometry.dispose();
     for (const tx of Object.values(this.tex)) tx.dispose();
     this.root.removeFromParent(); this.shadow.removeFromParent(); this.wand.removeFromParent();
+    for (const sp of this.puffs) { sp.removeFromParent(); sp.material.dispose(); }
   }
 }

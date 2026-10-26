@@ -10,7 +10,7 @@ Run against the dev server (`실행.command` or `npx vite --port 5183`). Screens
 
 Always pass `?q=high`: on SwiftShader the auto quality judge would fall back to 2D.
 - `uv run --with playwright python tools/qa/wm3d_travel.py URL tag [--full] [--reduced]` — round-to-round travel: frozen-clock stills, round 2/3 playable, full game to the finale, reduced-motion path
-- `uv run --with playwright python tools/qa/travel_video.py URL out.mp4` — preview video of the travel (frozen clock, 30 fps, needs ffmpeg)
+- `uv run --with playwright python tools/qa/travel_video.py URL out.mp4` — preview video of the travel incl. Glee's run, twirl and landing (travel clock and Glee's clock frozen in lockstep, 30 fps, needs ffmpeg)
 - `uv run --with playwright python tools/qa/quality_check.py` — auto quality (no ?q, real GPU via Metal): rule table, stale v1 "2d" ignored, stays 3D
 - `uv run --with playwright python tools/qa/gpu_cost.py URL 1440x900 2` — real GPU ms per 3D frame (render + a 1-pixel readPixels sync; `gl.finish()` does NOT wait for the GPU in Chrome); headless rAF intervals are NOT a speed measure either
 - `uv run --with playwright python tools/qa/pose_fit.py URL [yaws] [pitches] [thicks]` — measure 3D card pose metrics (near wall, bottom wall, edge lean, face aspect) on a grid and rank them against the art's medians
@@ -21,3 +21,4 @@ Always pass `?q=high`: on SwiftShader the auto quality judge would fall back to 
 - `uv run --with playwright --with pillow python tools/qa/glee_flow.py URL tag` — Glee through a real round: grab, hint, wrong pair, right pair, result, travel
 - `uv run --with playwright --with pillow python tools/qa/glee_compare.py SHEET.png URL tag` — character sheet drawings next to the same poses of the 3D model
 - `uv run --with playwright python tools/qa/glee_cost.py URL 1440x900 2` — Glee's GPU cost (game size / huge / hidden), Metal
+- `uv run --with playwright --with pillow python tools/qa/glee_run_probe.py URL tag t1,t2,...` — win round 1, freeze the travel at given times, print Glee's frame and dust puffs, save crops (waits on the travel itself: at DPR 2 SwiftShader the result card's 2.7 s takes much longer)

@@ -12,7 +12,7 @@ from playwright.async_api import async_playwright
 URL = sys.argv[1] if len(sys.argv) > 1 else 'http://127.0.0.1:5183/?q=high'
 MP4 = sys.argv[2] if len(sys.argv) > 2 else os.path.join(OUT, 'travel.mp4')
 FPS = 30
-END = 1.05 + 1.25 + 0.2          # DEPART + ARRIVE + a short hold
+END = 1.05 + 1.25 + 0.95         # DEPART + ARRIVE + Glee's twirl and landing
 FRAMES = os.path.join(OUT, 'travel_frames')
 
 STATE = '''() => { const s = window.WM3D, sc = s && s.scene; if (!sc) return null;
@@ -65,11 +65,13 @@ async def main():
             if await pg.evaluate('() => window.WM3D.travel.phase') != 'idle':
                 break
         n = int(END * FPS)
+        g0 = await pg.evaluate('() => window.WM3D.glee ? window.WM3D.glee.t : 0')
         for f in range(n + 1):
-            await pg.evaluate(f'() => {{ window.WM3D.travel.freezeAt = {f / FPS:.4f}; }}')
+            # Glee's own clock (blinks, the twirl after the run) steps with the frozen travel clock
+            await pg.evaluate(f'() => {{ const W = window.WM3D; W.travel.freezeAt = {f / FPS:.4f}; if (W.glee) W.glee.freezeAt = {g0 + f / FPS:.4f}; }}')
             await pg.evaluate(TWO_FRAMES)
             await pg.screenshot(path=os.path.join(FRAMES, f'f_{f:03d}.png'))
-        await pg.evaluate('() => { window.WM3D.travel.freezeAt = null; }')
+        await pg.evaluate('() => { const W = window.WM3D; W.travel.freezeAt = null; if (W.glee) W.glee.freezeAt = null; }')
         await b.close()
     # hold the first frame 0.4 s, then the run
     subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', str(FPS), '-i', os.path.join(FRAMES, 'f_%03d.png'),

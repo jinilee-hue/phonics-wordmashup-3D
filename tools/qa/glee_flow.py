@@ -108,8 +108,8 @@ async def main():
         await shot('result')
         for _ in range(80):
             await pg.wait_for_timeout(100)
-            if await pg.evaluate("() => window.WM3D.glee.act && window.WM3D.glee.act.kind === 'whee'"): break
-        await pg.wait_for_timeout(800)
+            if await pg.evaluate("() => window.WM3D.travel.phase !== 'idle'"): break
+        await pg.wait_for_timeout(300)
         await shot('travel')
         st = await settle(pg)
         await shot('round 2')

@@ -150,7 +150,7 @@ function attach(scene: Any) {
     const wrapped = function (this: Any) {
       const afterWin = scene.roundIndex > 0;          // create() resets it to 0 before round 1
       startRound.call(scene);
-      if (afterWin && state.on && state.travel && !reducedMotion()) { beginTravel(scene); state.glee?.react('whee'); }
+      if (afterWin && state.on && state.travel && !reducedMotion()) beginTravel(scene);   // Glee runs along (travel clock)
     };
     (wrapped as Any).__wm3d = true;
     scene.startRound = wrapped;
@@ -253,6 +253,7 @@ function frame(game: Phaser.Game) {
   state.travel!.update(dt);
   if (state.glee) {
     placeGlee(s);
+    state.glee.setPortal(s.cx, s.cy, s.zoneR);
     const d = s.dragCard;
     state.glee.dragTarget = d?.active ? { x: d.x, y: d.y } : null;
     state.glee.update(dt);
@@ -356,7 +357,10 @@ export function start3D(game: Phaser.Game) {
       state.cards.clock = () => travel.elapsed();
       state.cards.traveling = () => travel.active;
       state.zone.clock = () => travel.elapsed();
-      if (new URLSearchParams(location.search).get('glee') !== 'off') state.glee = new Glee(stage);
+      if (new URLSearchParams(location.search).get('glee') !== 'off') {
+        state.glee = new Glee(stage);
+        state.glee.runClock = () => (travel.active ? travel.elapsed() : null);
+      }
       // depth relief for the backdrop (the flight parallax); flat until it loads
       const depth = new Image();
       depth.onload = () => state.stage?.setDepth(depth);
