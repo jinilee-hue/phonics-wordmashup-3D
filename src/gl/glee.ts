@@ -302,10 +302,32 @@ function ell(x: number, y: number, z: number, rx: number, ry: number, rz: number
 const torso = (x: number, y: number, z: number) =>
   smin(ell(x, y - 0.6, z, 0.39, 0.4, 0.33), ell(x, y - 0.38, z - 0.015, 0.385, 0.24, 0.32), 0.12);
 const clamp = THREE.MathUtils.clamp;
+
+/** Drag-to-spin angle: follows the finger while held, glides with the release speed, then springs back
+ *  to the nearest full turn (biased toward the way it was going). Same feel as Halli Galli 3D's characters. */
+export class Spinner {
+  angle = 0; vel = 0; held = false; settling = false; target = 0;
+  step(dt: number) {
+    if (this.held) { this.settling = false; return true; }
+    if (!this.settling) {
+      if (Math.abs(this.vel) > 2.2) { this.angle += this.vel * dt; this.vel *= Math.exp(-dt / 0.42); return true; }
+      if (this.angle === 0 && this.vel === 0) return false;
+      const TAU = Math.PI * 2, bias = Math.sign(this.vel || 0) * 0.3;
+      this.target = Math.round(this.angle / TAU + bias) * TAU;
+      this.settling = true;
+    }
+    const k = 50, c = 2 * Math.sqrt(k);                     // critically damped spring (per s)
+    this.vel += (k * (this.target - this.angle) - c * this.vel) * dt;
+    this.angle += this.vel * dt;
+    if (Math.abs(this.target - this.angle) < 0.002 && Math.abs(this.vel) < 0.06) { this.angle = 0; this.vel = 0; this.settling = false; return false; }
+    return true;
+  }
+}
 const lerp = THREE.MathUtils.lerp;
 const lin = (a: number, b: number, x: number) => clamp((x - a) / (b - a), 0, 1);
 const smooth = (a: number, b: number, x: number) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const easeInOut = (x: number) => x * x * (3 - 2 * x);
+const easeOutBack01 = (x: number) => { const c1 = 1.7, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
 
 function canvasTex(draw: (g: CanvasRenderingContext2D, s: number) => void, size = 96) {
   const c = document.createElement('canvas');
@@ -351,6 +373,37 @@ const puffTex = () => canvasTex((g, s) => {
   gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.4, 'rgba(246,238,255,.85)'); gr.addColorStop(0.75, 'rgba(196,170,255,.45)'); gr.addColorStop(1, 'rgba(170,140,255,0)');
   g.fillStyle = gr; g.fillRect(0, 0, s, s);
 }, 64);
+/** listening: a white badge with a pink ear and sound waves coming in from the left */
+const earTex = () => canvasTex((g, s) => {
+  const R = s * 0.42;
+  g.save();
+  g.shadowColor = 'rgba(80,20,60,.35)'; g.shadowBlur = s * 0.05; g.shadowOffsetY = s * 0.02;
+  g.beginPath(); g.arc(s / 2, s / 2, R, 0, Math.PI * 2); g.fillStyle = '#ffffff'; g.fill();
+  g.restore();
+  g.beginPath(); g.arc(s / 2, s / 2, R - s * 0.012, 0, Math.PI * 2); g.lineWidth = s * 0.024; g.strokeStyle = '#ffc2dc'; g.stroke();
+  const cx = s * 0.58, cy = s * 0.5, r = s * 0.2;
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(cx - r * 0.1, cy + r * 1.05);
+  g.bezierCurveTo(cx - r * 0.95, cy + r * 0.95, cx - r * 0.85, cy - r * 1.15, cx + r * 0.1, cy - r * 1.1);
+  g.bezierCurveTo(cx + r * 1.05, cy - r * 1.05, cx + r * 1.05, cy - r * 0.05, cx + r * 0.55, cy + r * 0.38);
+  g.bezierCurveTo(cx + r * 0.28, cy + r * 0.62, cx + r * 0.45, cy + r * 1.08, cx - r * 0.1, cy + r * 1.05);
+  g.closePath();
+  g.fillStyle = '#ffc6de'; g.fill();
+  g.lineWidth = s * 0.042; g.strokeStyle = '#f2479a'; g.stroke();
+  g.beginPath();                                                     // inner curl
+  g.moveTo(cx - r * 0.25, cy + r * 0.25);
+  g.bezierCurveTo(cx - r * 0.45, cy - r * 0.55, cx + r * 0.55, cy - r * 0.7, cx + r * 0.42, cy - r * 0.05);
+  g.bezierCurveTo(cx + r * 0.35, cy + r * 0.25, cx + r * 0.05, cy + r * 0.2, cx + r * 0.05, cy + r * 0.45);
+  g.lineWidth = s * 0.034; g.stroke();
+  for (let i = 0; i < 2; i++) {                                      // sound waves
+    g.globalAlpha = 1 - i * 0.3;
+    g.beginPath();
+    g.arc(cx - r * 0.3, cy, r * (1.35 + i * 0.5), Math.PI * 0.8, Math.PI * 1.2);
+    g.lineWidth = s * 0.04; g.strokeStyle = '#f2479a'; g.stroke();
+  }
+  g.globalAlpha = 1;
+}, 128);
 const shadowTex = () => canvasTex((g, s) => {
   const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
   gr.addColorStop(0, 'rgba(18,6,40,1)'); gr.addColorStop(0.55, 'rgba(18,6,40,.5)'); gr.addColorStop(1, 'rgba(18,6,40,0)');
@@ -360,26 +413,26 @@ const shadowTex = () => canvasTex((g, s) => {
 type Arm = { th: number; ph: number; len: number };     // th: 0 hangs down, PI/2 straight out, PI straight up
 type Pose = {
   armL: Arm; armR: Arm;
-  sy: number; lean: number; yaw: number;
+  sy: number; lean: number; yaw: number; pitch: number;
   happy: number; sad: number; open: number; frown: number; o: number; blush: number;
   lookX: number; lookY: number;
 };
 const newPose = (): Pose => ({
   armL: { th: 0.95, ph: 0.1, len: 0.21 }, armR: { th: 0.95, ph: 0.1, len: 0.21 },
-  sy: 1, lean: 0, yaw: 0, happy: 0, sad: 0, open: 0.85, frown: 0, o: 0, blush: 1, lookX: 0, lookY: 0,
+  sy: 1, lean: 0, yaw: 0, pitch: 0, happy: 0, sad: 0, open: 0.85, frown: 0, o: 0, blush: 1, lookX: 0, lookY: 0,
 });
-type Act = { kind: string; t0: number; dur: number; targets?: Pt[] };
+type Act = { kind: string; t0: number; dur: number; targets?: Pt[]; split?: number };
 const mixArm = (a: Arm, b: Arm, k: number): Arm => ({ th: lerp(a.th, b.th, k), ph: lerp(a.ph, b.ph, k), len: lerp(a.len, b.len, k) });
 /** One drawn frame: where the feet touch the floor (game px) and how deep (scale 1 = at home), plus the body pose. */
 type Frame = {
   gx: number; gy: number; scale: number;
-  jump: number; yaw: number; pitch: number; lean: number; sy: number;
+  jump: number; yaw: number; pitch: number; lean: number; sy: number; flip: number;
   armL: Arm; armR: Arm; footL: THREE.Vector3; footR: THREE.Vector3;
   opacity: number;
   shadow: { x: number; y: number; scale: number; a: number };
 };
 const newFrame = (): Frame => ({
-  gx: 0, gy: 0, scale: 1, jump: 0, yaw: 0, pitch: 0, lean: 0, sy: 1,
+  gx: 0, gy: 0, scale: 1, jump: 0, yaw: 0, pitch: 0, lean: 0, sy: 1, flip: 0,
   armL: { th: 0.95, ph: 0.1, len: 0.21 }, armR: { th: 0.95, ph: 0.1, len: 0.21 },
   footL: FOOT_L.clone(), footR: FOOT_R.clone(), opacity: 1, shadow: { x: 0, y: 0, scale: 1, a: 1 },
 });
@@ -393,7 +446,9 @@ export class Glee {
   private glitterGroup = new THREE.Group();
   private glitter: THREE.Points | null = null;
   private shadow: THREE.Mesh;
-  private tex = { heart: heartTex(), star: starTex(), drop: dropTex(), sparkle: sparkleTex(), shadow: shadowTex(), puff: puffTex() };
+  private tex = { heart: heartTex(), star: starTex(), drop: dropTex(), sparkle: sparkleTex(), shadow: shadowTex(), puff: puffTex(), ear: earTex() };
+  private ear: THREE.Sprite;
+  private earOn = 0;
   private fx: Fx[] = [];
   private wand: THREE.Sprite;
   private cur = newPose();
@@ -422,8 +477,24 @@ export class Glee {
   private eul = new THREE.Euler(0, 0, 0, 'YXZ');
   private v1 = new THREE.Vector3();
   private v2 = new THREE.Vector3();
+  private m2 = new THREE.Matrix4();
+  private m3 = new THREE.Matrix4();
+  private v3 = new THREE.Vector3();
+  private follow = 0;
+  private pokeT0 = -1e9;
   /** travel clock (s since the camera flight started) while a travel runs, else null; set by index.ts */
   runClock: () => number | null = () => null;
+  /** the mouse / finger in game px while it moves (index.ts clears it after a few still seconds) */
+  pointer: Pt | null = null;
+  /** drag on Glee: left-right turns her round, up-down somersaults (both spring back to the front) */
+  readonly spin = new Spinner();
+  readonly flip = new Spinner();
+  /** tutor: 0..1 mouth opening while a line plays (null = the expression decides) */
+  talk: number | null = null;
+  /** tutor body language: asking (open arms, head tilt) or listening (hand at the ear, ear icon) */
+  mode: 'ask' | 'listen' | null = null;
+  /** the listening hand (cupped at the ear) */
+  listenArm: Arm = { th: 2.65, ph: 0.6, len: 0.24 };      // compared 4 variants: hand by the side of the head reads as listening
   /** tests: pin the clock (s) and/or place Glee explicitly */
   freezeAt: number | null = null;
   override: { x: number; y: number; h: number; yaw?: number; pitch?: number } | null = null;
@@ -465,7 +536,10 @@ export class Glee {
     this.wand = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex.sparkle, transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending }));
     this.wand.renderOrder = 4;
     this.wand.visible = false;
-    stage.overlay.add(this.shadow, this.root, this.wand);
+    this.ear = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex.ear, transparent: true, depthTest: false, depthWrite: false }));
+    this.ear.renderOrder = 6;
+    this.ear.visible = false;
+    stage.overlay.add(this.shadow, this.root, this.wand, this.ear);
     for (let i = 0; i < 8; i++) {
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex.puff, transparent: true, depthTest: false, depthWrite: false }));
       sp.visible = false;
@@ -532,6 +606,24 @@ export class Glee {
     return { x: w.x + this.stage.W / 2, y: this.stage.H / 2 - w.y };
   }
 
+  /** Is game px (x, y) on Glee (at home, not running)? */
+  hitTest(x: number, y: number) {
+    if (!this.visible || this.running) return false;
+    const P = this.override ?? this.home, h = P.h;
+    return x > P.x - 0.5 * h && x < P.x + 0.5 * h && y > P.y - (1.22 + this.jump) * h && y < P.y + 0.08 * h;
+  }
+
+  /** a tap: squash, boing, giggle eyes */
+  poke() { this.pokeT0 = this.t; }
+
+  /** tutor: point at the targets in turn (switching at `split` of `dur`) */
+  pointAt(targets: Pt[], dur: number, split = 0.5) {
+    this.play([{ kind: 'hint', t0: this.t, dur, targets, split }]);
+  }
+
+  /** the tutor's wave (hello) without the hop */
+  wave(dur = 1.6) { this.play([{ kind: 'wave', t0: this.t, dur }]); }
+
   react(kind: GleeEvent, targets?: Pt[]) {
     const now = this.t;
     const start = (k: string, dur: number, tg?: Pt[]): Act => ({ kind: k, t0: now, dur, targets: tg });
@@ -573,8 +665,27 @@ export class Glee {
     out.lean = 0.035 * Math.sin(t * 1.3);
     out.yaw = yaw0 + 0.06 * Math.sin(t * 0.5);
     out.happy = 0; out.sad = 0; out.open = 0.85; out.frown = 0; out.o = 0; out.blush = 1;
-    out.lookX = -out.yaw * 1.3; out.lookY = 0.05;
+    out.lookX = -out.yaw * 1.3; out.lookY = 0.05; out.pitch = 0;
+    // follow the mouse / finger like Halli Galli's pink bell: the body turns and nods toward it, the eyes do the rest
+    // (talking or listening: mostly at the child)
+    const P = this.pointer;
+    if (P) {
+      const eye = this.toScreen(this.v3.set(0, 0.656, 0.3));
+      const nx = clamp((P.x - eye.x) / (this.stage.W * 0.4), -1, 1), ny = clamp((P.y - eye.y) / (this.stage.H * 0.45), -1, 1);
+      const k = (this.mode || this.talk !== null ? 0.45 : 1) * this.follow, body = this.reduced ? 0 : 1;
+      out.yaw = yaw0 + clamp(nx * 0.5, -0.45, 0.45) * k * body + 0.06 * Math.sin(t * 0.5) * (1 - k);
+      out.pitch = ny * 0.13 * k * body;
+      out.lookX = lerp(-out.yaw * 1.3, clamp(nx * 1.2 - out.yaw * 1.3, -1, 1), k);
+      out.lookY = lerp(0.05, clamp(-ny * 1.0 + 0.05, -1, 1), k);
+    }
     if (this.dragTarget) this.lookAt(this.dragTarget, out);
+    if (this.mode === 'ask') {                                // palms open to the child, head tilted
+      out.armL = { th: 1.45 + 0.05 * Math.sin(t * 3), ph: 0.6, len: 0.24 }; out.armR = { th: 1.45 + 0.05 * Math.sin(t * 3 + 1), ph: 0.6, len: 0.24 };
+      out.lean = 0.07; out.open = 0.9; out.lookY = Math.max(out.lookY, 0.15);
+    } else if (this.mode === 'listen') {                     // hand cupped at the ear, leaning in
+      out.armL = { ...this.listenArm };
+      out.lean = -0.09 + 0.015 * Math.sin(t * 2.2); out.pitch += 0.05; out.open = 0.6; out.o = 0.25;
+    }
     let jump = 0;
     const a = this.act;
     const u = a ? t - a.t0 : 0;
@@ -620,7 +731,7 @@ export class Glee {
       }
       case 'hint': {
         const tg = a.targets ?? [];
-        const target = tg.length ? tg[u < a.dur / 2 || tg.length < 2 ? 0 : 1] : null;
+        const target = tg.length ? tg[u < a.dur * (a.split ?? 0.5) || tg.length < 2 ? 0 : 1] : null;
         out.open = 0.9;
         if (target) this.point(target, out);
         break;
@@ -637,6 +748,14 @@ export class Glee {
         break;
       }
       case 'land': out.sy = 1 - 0.12 * Math.sin((Math.PI * u) / a.dur); out.happy = 1; out.open = 1; break;
+    }
+    // a poke: squash and boing, giggle eyes
+    const pk = (t - this.pokeT0) / 0.65;
+    if (pk >= 0 && pk < 1) {
+      const w = Math.sin(pk * Math.PI * 3) * (1 - pk);
+      out.sy = 1 - 0.16 * w;
+      if (!this.reduced) jump = Math.max(jump, Math.max(0, Math.sin(Math.min(1, pk * 1.6) * Math.PI)) * 0.16);
+      if (pk < 0.75) { out.happy = 1; out.open = 1; }
     }
     return jump;
   }
@@ -770,7 +889,16 @@ export class Glee {
     const pos = this.worldAt(F.gx, F.gy, F.scale, this.v1);
     pos.y += F.jump * h;
     this.qtn.setFromEuler(this.eul.set(F.pitch, F.yaw, F.lean, 'YXZ'));
-    return out.compose(pos, this.qtn, this.v2.set(h, h, h));
+    out.compose(pos, this.qtn, this.v2.set(h, h, h));
+    if (F.flip) {
+      // somersault about the body's middle, around the screen's horizontal axis (down = forward roll)
+      const cy = pos.y + 0.5 * h;
+      this.m2.makeTranslation(-pos.x, -cy, -pos.z);
+      this.m2.premultiply(this.m3.makeRotationX(F.flip));
+      this.m2.premultiply(this.m3.makeTranslation(pos.x, cy, pos.z));
+      out.premultiply(this.m2);
+    }
+    return out;
   }
 
   /** Dust puffs at every footfall of the run, replayed from the travel clock (so frozen frames show them). */
@@ -811,6 +939,8 @@ export class Glee {
     if (!this.visible) { this.drawPuffs(null); return; }
     const c = this.cur, g = this.tgt, F = this.F;
     const ru = this.runClock();
+    this.follow += ((this.pointer ? 1 : 0) - this.follow) * (1 - Math.exp(-dt * (this.pointer ? 8 : 2.2)));
+    this.spin.step(dt); this.flip.step(dt);
     const run = ru !== null && ru < RUN_END && !this.reduced;
     if (run && !this.running) {
       this.running = true;
@@ -826,6 +956,7 @@ export class Glee {
     const h = P.h;
     if (this.running) {
       this.runFrame(ru!, F, g);
+      F.flip = 0;
       // keep the eased pose in step, so the twirl starts exactly where the run ended
       c.armL = { ...F.armL }; c.armR = { ...F.armR };
       c.yaw = F.yaw; c.sy = F.sy; c.lean = F.lean;
@@ -839,6 +970,7 @@ export class Glee {
         if (this.act) this.act.t0 = t;
         else this.nextWave = Math.max(this.nextWave, t + 5);     // no idle wave right after a reaction
       }
+      if (this.mode || this.talk !== null) this.nextWave = Math.max(this.nextWave, t + 6);   // no idle wave mid-conversation
       if (!this.act && t > this.nextWave) { this.play([{ kind: 'wave', t0: t, dur: 1.8 }]); this.nextWave = t + 11 + Math.random() * 6; }
       // pose: analytic target, then ease toward it (jump stays analytic)
       this.jump = this.targetPose(t, g);
@@ -853,11 +985,12 @@ export class Glee {
         c.yaw = g.yaw + Math.atan2(Math.sin(d), Math.cos(d));
         c.yaw = ease(c.yaw, g.yaw, 6);
       }
-      c.sy = ease(c.sy, g.sy, 22); c.lean = ease(c.lean, g.lean, 10);
+      c.sy = ease(c.sy, g.sy, 22); c.lean = ease(c.lean, g.lean, 10); c.pitch = ease(c.pitch, g.pitch, 7);
       for (const f of ['happy', 'sad', 'open', 'frown', 'o', 'blush'] as const) c[f] = ease(c[f], g[f], 14);
       c.lookX = ease(c.lookX, g.lookX, 12); c.lookY = ease(c.lookY, g.lookY, 12);
       F.gx = P.x; F.gy = P.y; F.scale = 1; F.jump = this.jump;
-      F.yaw = c.yaw; F.pitch = this.override?.pitch ?? 0; F.lean = c.lean; F.sy = c.sy;
+      F.yaw = c.yaw + this.spin.angle; F.pitch = c.pitch + (this.override?.pitch ?? 0); F.lean = c.lean; F.sy = c.sy;
+      F.flip = this.flip.angle;
       F.armL = c.armL; F.armR = c.armR;
       const tuck = this.act?.kind === 'twirl' ? clamp(this.jump / 0.13, 0, 1) : 0;
       F.footL.copy(FOOT_L).lerp(TUCK_L, tuck * 0.7); F.footR.copy(FOOT_R).lerp(TUCK_R, tuck * 0.7);
@@ -889,7 +1022,8 @@ export class Glee {
     (u.uSquash.value as THREE.Vector3).set(sxz, sy, sxz);
     (u.uLook.value as THREE.Vector2).set(c.lookX, c.lookY);
     u.uBlink.value = blink * (1 - c.happy);
-    u.uHappy.value = c.happy; u.uSad.value = c.sad; u.uOpen.value = c.open;
+    u.uHappy.value = c.happy; u.uSad.value = c.sad;
+    u.uOpen.value = this.talk !== null ? 0.12 + 0.88 * this.talk : c.open;
     u.uFrown.value = c.frown; u.uO.value = c.o; u.uBlush.value = c.blush;
     const dpr = st.renderer.getPixelRatio();
     u.uPx.value = 1 / (h * dpr * F.scale);
@@ -916,6 +1050,16 @@ export class Glee {
       this.wand.position.set(w.x, w.y, 0);
       this.wand.scale.setScalar(h * (0.26 + 0.05 * Math.sin(t * 12)));
     }
+    // ear icon beside the head while listening
+    this.earOn += ((this.mode === 'listen' ? 1 : 0) - this.earOn) * (1 - Math.exp(-dt * 12));
+    this.ear.visible = this.earOn > 0.02 && !this.running;
+    if (this.ear.visible) {
+      const head = this.toScreen(this.v3.set(-0.5, 1.0, 0));
+      this.ear.position.set(head.x - st.W / 2 - h * 0.12, st.H / 2 - head.y, 0);
+      const pulse = 1 + 0.07 * Math.sin(t * 9);
+      this.ear.scale.setScalar(h * 0.5 * pulse * easeOutBack01(this.earOn));
+      this.ear.material.opacity = Math.min(1, this.earOn * 1.4);
+    }
     // fx sprites
     this.fx = this.fx.filter(f => {
       const a = t - f.t0;
@@ -936,6 +1080,7 @@ export class Glee {
     this.body.geometry.dispose(); this.glitter?.geometry.dispose();
     for (const tx of Object.values(this.tex)) tx.dispose();
     this.root.removeFromParent(); this.shadow.removeFromParent(); this.wand.removeFromParent();
+    this.ear.removeFromParent(); this.ear.material.dispose();
     for (const sp of this.puffs) { sp.removeFromParent(); sp.material.dispose(); }
   }
 }

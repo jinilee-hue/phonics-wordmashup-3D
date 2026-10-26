@@ -8,6 +8,7 @@ import { Cards3D, type LiveCard } from './cards3d';
 import { gameAudio } from '../audio';
 import { Glee } from './glee';
 import { Mashup } from './mashup';
+import { Tutor } from './tutor';
 import { GATE_UV, Stage, type Quality } from './stage';
 import { DEPART, Travel } from './travel';
 import { Zone3D } from './zone3d';
@@ -46,6 +47,11 @@ const state = {
   glee: null as Glee | null,
   /** the card collision (fight cloud, pop, reveal) */
   mashup: null as Mashup | null,
+  /** Glee leading the game: voice lines, listening, pacing (off with ?tutor=off) */
+  tutor: null as Tutor | null,
+  game: null as Phaser.Game | null,
+  /** a press that landed on Glee: GameScene must not pick a card with it */
+  gleePress: false,
   /** hide Phaser's cards while the camera is in flight (they wait at their slots) */
   travelHide: false,
   scene: null as Any,
@@ -113,12 +119,12 @@ const containerWillRender = Phaser.GameObjects.Container.prototype.willRender;
 // Glee reacts to the player: grabbing a card, dropping it into the zone.
 const cardStartDrag = WordCard.prototype.startDrag;
 (WordCard.prototype as Any).startDrag = function (this: WordCard, ...args: Any[]) {
-  if (state.on) state.glee?.react('grab');
+  if (state.on) { state.glee?.react('grab'); state.tutor?.onGrab(this); }
   return (cardStartDrag as Any).apply(this, args);
 };
 const cardSnap = WordCard.prototype.snapToZone;
 (WordCard.prototype as Any).snapToZone = function (this: WordCard, ...args: Any[]) {
-  if (state.on) state.glee?.react('snap');
+  if (state.on) { state.glee?.react('snap'); state.tutor?.onSnap(this); }
   return (cardSnap as Any).apply(this, args);
 };
 
@@ -148,6 +154,7 @@ function attach(scene: Any) {
   hide(scene.zoneGfx); hide(scene.zoneGlowGfx); hide(scene.zoneSpinContainer);
   for (const t of scene.neonCores ?? []) if (t.active) hide(t);
   state.zone!.place(scene.cx, scene.cy, scene.zoneR, stage.quality);
+  state.zone!.reform();                                   // the badge rises out of the floor, as in the intro
   state.cards!.clear();
   state.travel?.cancel();
   state.travelHide = false;
@@ -191,20 +198,59 @@ function attach(scene: Any) {
     (wrapped as Any).__wm3d = true;
     scene.playCardReveal = wrapped;
   }
-  // the result card leaves 2.4 s after the win (GameScene.onRoundWin): the rays and the rain stop with it
-  wrapOnce(scene, 'onRoundWin', () => scene.time.delayedCall(2400, () => state.mashup?.stopReveal()));
-  wrapOnce(scene, 'onWrongMatch', () => state.glee?.react('wrong'));
+  // the result card leaves 2.4 s after the win (GameScene.onRoundWin): the rays and the rain stop with it.
+  // With the tutor, Glee decides when: after "Say it with me!" and "Let's go!" (she holds that timer).
+  const roundWin = scene.onRoundWin;
+  if (!roundWin.__wm3d) {
+    const wrapped = function (this: Any, cont: Any) {
+      const time = scene.time, delayed = time.delayedCall;
+      time.delayedCall = function (delay: number, cb: Any, args?: Any, scope?: Any) {
+        if (delay === 2400 && typeof cb === 'function') {
+          const fire = () => { state.mashup?.stopReveal(); cb.apply(scope ?? scene, args ?? []); };
+          if (state.on && state.tutor) { state.tutor.afterWin(fire); return null; }
+          return delayed.call(time, delay, fire, args, scope);
+        }
+        return delayed.call(time, delay, cb, args, scope);
+      };
+      try { return roundWin.call(scene, cont); } finally { delete time.delayedCall; }
+    };
+    (wrapped as Any).__wm3d = true;
+    scene.onRoundWin = wrapped;
+  }
+  // a press on Glee pokes or spins her; it must not also grab the nearest card (GameScene picks by distance)
+  const inp = scene.input;
+  for (const fn of [...(inp.listeners('pointerdown') as Any[])]) {
+    if (fn.__wm3d) continue;
+    inp.off('pointerdown', fn);
+    const guarded = (...a: Any[]) => (state.gleePress ? undefined : fn(...a));
+    (guarded as Any).__wm3d = true;
+    inp.on('pointerdown', guarded);
+  }
+  wrapOnce(scene, 'startMic', () => state.tutor?.quiet());
+  // the Mic's feedback toasts (Korean text) become Glee's voice
+  const toast = scene.showToast;
+  if (!toast.__wm3d) {
+    const wrapped = function (this: Any, msg: string) {
+      if (state.on && state.tutor?.toast(msg)) return;
+      return toast.call(scene, msg);
+    };
+    (wrapped as Any).__wm3d = true;
+    scene.showToast = wrapped;
+  }
+  wrapOnce(scene, 'onWrongMatch', () => { state.glee?.react('wrong'); state.tutor?.onWrong(); });
   wrapOnce(scene, 'triggerCollision', () => {
     state.glee?.react('match');
+    state.tutor?.onMatch();
     for (const c of [scene.selectedLeft, scene.selectedRight]) if (c?.active) state.cards?.meet(c, scene.cx);
   });
-  wrapOnce(scene, 'showFinale', () => state.glee?.react('finale'));
+  wrapOnce(scene, 'showFinale', () => { state.glee?.react('finale'); state.tutor?.onFinale(); });
   state.mashup?.clear();
   if (state.glee) {
     state.glee.reset();
     state.glee.reduced = reducedMotion();
-    state.glee.react('hello');
+    if (!state.tutor) state.glee.react('hello');          // the tutor waves as she says hi
   }
+  state.tutor?.attach(scene);
 }
 
 function reducedMotion() {
@@ -312,7 +358,7 @@ function showHint3D(scene: Any) {
     scene.tweens.add({ targets: card, scaleX: sx * 1.14, scaleY: sy * 1.14, duration: 200, ease: 'Back.easeOut', yoyo: true, repeat: 2 });
   });
   const targets = [correctL, correctR].filter((c: Any) => c?.active).map((c: Any) => ({ x: c.x, y: c.y }));
-  if (targets.length) state.glee?.react('hint', targets);
+  if (targets.length && !state.tutor?.hint(targets)) state.glee?.react('hint', targets);
 }
 
 /** Glee's spot: the left front of the round stage, under the week/base cards and left of the
@@ -351,7 +397,17 @@ function frame(game: Phaser.Game) {
     state.glee.setPortal(s.cx, s.cy, s.zoneR);
     const d = s.dragCard;
     state.glee.dragTarget = d?.active ? { x: d.x, y: d.y } : null;
+    // follow the mouse / finger while it moves (mouse 4 s, finger 2.5 s), like Halli Galli's pink bell
+    const engaged = ptr.inside && now - ptr.t < (ptr.mouse ? 4000 : 2500) && !gleeDrag;
+    state.glee.pointer = engaged ? { x: ptr.x, y: ptr.y } : null;
+    if (!d && ptr.inside && (gleeDrag || state.glee.hitTest(ptr.x, ptr.y))) game.canvas.style.cursor = gleeDrag ? 'grabbing' : 'grab';
     state.glee.update(dt);
+  }
+  if (state.tutor) {
+    const live = [...(s.leftCards ?? []), ...(s.rightCards ?? [])].filter((c: Any) => c?.active);
+    const open = !s.busy && !state.travel!.active && live.length === 6 && !document.getElementById('intro-overlay');
+    const settled = open && live.every((c: Any) => state.cards!.isReady(c) && Math.abs(c.x - c.baseX) < 2 && !c.inZone);
+    state.tutor.update(dt, settled, open);
   }
   state.mashup?.update(dt);
   stage.render(t, dt);
@@ -415,6 +471,8 @@ function giveUp(reason: string) {
   state.glee = null;
   state.mashup?.dispose();
   state.mashup = null;
+  state.tutor?.dispose();
+  state.tutor = null;
   state.stage?.dispose();
   state.stage = null;
   // 2D only for this tab session; the next visit tries 3D again (at low after a slow give-up)
@@ -433,8 +491,79 @@ function fpsMeter(dt: number) {
   }
 }
 
+// ── the mouse / finger: Glee follows it, a tap pokes her, a drag spins her round (left-right) or flips her
+//    (up-down) and she springs back to face the front - like the pink bell in Halli Galli 3D ──
+const ptr = { x: 0, y: 0, t: -1e9, mouse: true, inside: true };
+type GleeDrag = { id: number; x0: number; y0: number; x: number; y: number; moved: boolean; axis: 'x' | 'y' | ''; hist: { t: number; dx: number; dy: number }[] };
+let gleeDrag: GleeDrag | null = null;
+function gamePoint(cx: number, cy: number) {
+  const g = state.game, c = g?.canvas;
+  if (!g || !c) return null;
+  const r = c.getBoundingClientRect();
+  if (!r.width || !r.height) return null;
+  return { x: ((cx - r.left) * g.scale.width) / r.width, y: ((cy - r.top) * g.scale.height) / r.height };
+}
+function dragGlee(x: number, y: number) {
+  const d = gleeDrag!, g = state.glee, st = state.stage;
+  if (!g || !st) return;
+  const dx = x - d.x, dy = y - d.y, now = performance.now();
+  d.x = x; d.y = y;
+  if (!d.moved) {
+    if (Math.hypot(x - d.x0, y - d.y0) < 9) return;
+    d.moved = true;
+    d.axis = Math.abs(x - d.x0) >= Math.abs(y - d.y0) ? 'x' : 'y';     // one axis per drag, so she doesn't wobble
+    g.spin.held = g.flip.held = true;
+  }
+  if (d.axis === 'x') g.spin.angle += (dx * Math.PI * 2) / (st.W * 0.45);
+  else g.flip.angle += (dy * Math.PI * 2) / (st.H * 0.7);                // down = forward roll
+  d.hist.push({ t: now, dx, dy });
+  while (d.hist.length && now - d.hist[0].t > 90) d.hist.shift();
+}
+function endGleeDrag(e: PointerEvent) {
+  const d = gleeDrag;
+  if (!d || e.pointerId !== d.id) return;
+  gleeDrag = null;
+  state.gleePress = false;
+  const g = state.glee, st = state.stage;
+  if (!g || !st) return;
+  if (!d.moved) { g.poke(); state.tutor?.onPoke(); return; }
+  const now = performance.now(), h = d.hist.filter(p => now - p.t < 90);
+  const span = h.length ? Math.max(16, now - h[0].t) : 16;
+  const vx = h.reduce((a, p) => a + p.dx, 0) / span, vy = h.reduce((a, p) => a + p.dy, 0) / span;   // game px per ms
+  const cl = (v: number) => Math.max(-20, Math.min(20, v));
+  g.spin.vel = d.axis === 'x' ? cl((vx * 1000 * Math.PI * 2) / (st.W * 0.45)) : 0;
+  g.flip.vel = d.axis === 'y' ? cl((vy * 1000 * Math.PI * 2) / (st.H * 0.7)) : 0;
+  g.spin.held = g.flip.held = false;
+  const sp = d.axis === 'x' ? g.spin : g.flip;
+  state.tutor?.onSpin(Math.abs(sp.angle + sp.vel * 0.42) / (Math.PI * 2));
+}
+function listenPointer() {
+  addEventListener('pointermove', e => {
+    const p = gamePoint(e.clientX, e.clientY);
+    if (!p) return;
+    ptr.x = p.x; ptr.y = p.y; ptr.t = performance.now(); ptr.mouse = e.pointerType === 'mouse'; ptr.inside = true;
+    if (gleeDrag && e.pointerId === gleeDrag.id) dragGlee(p.x, p.y);
+  }, { passive: true });
+  addEventListener('pointerdown', e => {
+    const p = gamePoint(e.clientX, e.clientY);
+    if (!p) return;
+    ptr.x = p.x; ptr.y = p.y; ptr.t = performance.now(); ptr.mouse = e.pointerType === 'mouse'; ptr.inside = true;
+    state.tutor?.touched();
+    const s = state.scene, g = state.glee;
+    if (!state.on || !g || !s || e.button > 0 || gleeDrag || s.dragCard || s.collectionOpen) return;
+    if (document.getElementById('intro-overlay') || !g.hitTest(p.x, p.y)) return;
+    state.gleePress = true;
+    gleeDrag = { id: e.pointerId, x0: p.x, y0: p.y, x: p.x, y: p.y, moved: false, axis: '', hist: [] };
+  }, { capture: true, passive: true });
+  addEventListener('pointerup', endGleeDrag, { capture: true, passive: true });
+  addEventListener('pointercancel', endGleeDrag, { capture: true, passive: true });
+  document.documentElement.addEventListener('mouseleave', () => { ptr.inside = false; });
+  addEventListener('blur', () => { ptr.inside = false; });
+}
+
 export function start3D(game: Phaser.Game) {
   const { mode, forced } = pickMode();
+  state.game = game;
   state.mode = mode; state.forced = forced;
   (window as Any).WM3D = state;
   if (mode === '2d') return;
@@ -459,9 +588,17 @@ export function start3D(game: Phaser.Game) {
       state.zone.clock = () => travel.elapsed();
       state.mashup = new Mashup(stage);
       state.mashup.setQuality(stage.quality, reducedMotion());
-      if (new URLSearchParams(location.search).get('glee') !== 'off') {
+      const qs = new URLSearchParams(location.search);
+      if (qs.get('glee') !== 'off') {
         state.glee = new Glee(stage);
         state.glee.runClock = () => (travel.active ? travel.elapsed() : null);
+        if (qs.get('tutor') !== 'off') {
+          state.tutor = new Tutor(state.glee, {
+            glow: (card: Any) => state.cards?.hint(card),
+            showHint: () => state.scene?.showHint(),
+            bgm: () => (gameAudio as Any).bgmEl ?? null,
+          });
+        }
       }
       // depth relief for the backdrop (the flight parallax); flat until it loads
       const depth = new Image();
@@ -478,6 +615,7 @@ export function start3D(game: Phaser.Game) {
       return;
     }
     state.on = true;
+    listenPointer();
     const scene = game.scene.getScene('Game') as Any;
     scene.events.on(Phaser.Scenes.Events.CREATE, () => { if (state.on) attach(scene); });
     if (scene.sys.settings.status === Phaser.Scenes.RUNNING) attach(scene);

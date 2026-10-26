@@ -23,7 +23,12 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
     - 고정 카메라로 그리는 오버레이 단계(`stage.overlay`)에 있어서 패럴랙스나 공간 이동 중에도 화면의 같은 자리에 있다.
     - 반응: 시작 인사(손 흔들기), 카드를 잡으면 그 카드를 봄, 존에 넣으면 끄덕, 오답이면 슬픔(눈물·땀방울) 후 격려, 정답이면 환호(점프·하트·별), 힌트를 누르면 정답 카드를 차례로 가리킴, 마지막 화면에서 계속 환호.
     - 공간 이동 때 달리기(이동 시계로 구동): 등을 돌려 분홍 길을 따라 존까지 달려가 포털로 뛰어들고(카메라가 뒤따라감, 섬광 속에 사라짐) → 도착하면 다음 카드들과 함께 포털에서 튀어나와 플레이어 쪽을 보며 제자리로 달려옴 → 360도 한 바퀴 돌고 착지. 발걸음마다 먼지 구름. 움직임 줄이기 설정이면 이동 자체가 없어서 달리지 않는다.
+    - 포인터(할리갈리 핑크벨 방식): 마우스·손가락 쪽으로 몸과 눈을 돌린다. 잡고 돌리면 손을 따라 돌고, 놓으면 그 속도로 미끄러지다 가장 가까운 정면으로 돌아온다. 아래로 끌면 공중제비, 콕 찌르면 찌그러지며 뛴다. 글리를 잡는 동안 카드는 잡히지 않는다.
     - 2D 모드(`?q=2d`, 느린 기기 폴백)에는 나오지 않는다.
+  - `src/gl/tutor.ts` — 글리가 말로 게임을 이끈다(말풍선·글자 없이 음성만, 정해진 영어 문장 + 브라우저 음성 인식. 조직 정책상 LLM 대화는 쓰지 않음). 한 번에 한 명만 말하고, 아이가 움직이면 글리가 말을 멈춘다. 듣는 동안은 귀 배지만 보인다.
+    - 라운드: "Which two go together?" → 듣기 → 카드 단어를 말하면 그 카드를 넣고 "What goes with pan?" → 맞으면 "Pan and cake make... pancake!" → "Say it with me!" → 못 알아들으면 "Listen! Pan! Cake! Pancake! Your turn!" → 칭찬 → 다음 판.
+    - 오답(글자 토스트 대신 음성): 두 카드를 읽고 "That's not a word!" → 한 장이 맞았으면 "Pan is right!" 하며 그 카드를 다시 넣고 짝을 묻는다. 둘 다 틀리면 1번째 "Let's try again!", 2번째 첫 카드를 보여 주고 넣은 뒤 짝을 묻는다, 3번째 힌트. 원래 Mic 버튼의 한국어 안내도 글리 목소리로 바뀐다.
+    - 음성: `tools/build_glee_voice.py`(edge-tts `en-US-AnaNeural`, 시제품용) → `public/gl/voice/*.mp3`, `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다.
 - 배경 깊이: `tools/build_depth.py`가 배경 그림의 깊이 지도(Depth Anything V2 Small, 로컬 CPU)를 만들어 `public/gl/bg_depth.png`에 저장 → 배경이 입체 부조가 되어 카메라가 움직이면 시차가 생긴다(정지 화면은 원본과 똑같다).
   - 실행: `uv run --with torch --with transformers --with pillow --with numpy python tools/build_depth.py`
 - 카드 앞면: `tools/unwarp_cards.py`가 원본 카드 그림(기울기·두께가 그려진 PNG)에서 앞면만 찾아 정면으로 편다 → `public/gl/cards/*.webp`, `src/gl/cardFaces.ts`.
