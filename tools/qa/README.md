@@ -11,3 +11,5 @@ Run against the dev server (`실행.command` or `npx vite --port 5183`). Screens
 Always pass `?q=high`: on SwiftShader the auto quality judge would fall back to 2D.
 - `uv run --with playwright python tools/qa/wm3d_travel.py URL tag [--full] [--reduced]` — round-to-round travel: frozen-clock stills, round 2/3 playable, full game to the finale, reduced-motion path
 - `uv run --with playwright python tools/qa/travel_video.py URL out.mp4` — preview video of the travel (frozen clock, 30 fps, needs ffmpeg)
+- `uv run --with playwright python tools/qa/quality_check.py` — auto quality (no ?q, real GPU via Metal): rule table, stale v1 "2d" ignored, stays 3D
+- `uv run --with playwright python tools/qa/gpu_cost.py URL 1440x900 2` — real GPU ms per 3D frame (render + gl.finish); headless rAF intervals are NOT a speed measure

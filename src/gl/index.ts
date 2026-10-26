@@ -10,9 +10,23 @@ import { DEPART, Travel } from './travel';
 import { Zone3D } from './zone3d';
 
 type Mode = Quality | '2d';
-const STORE = 'wm3d-quality';
-const REMEMBER_MS = 7 * 24 * 3600 * 1000;
+// v2: v1 remembered '2d' for 7 days after one slow window (a 30 fps Energy-Saver cap was enough),
+// so a capable Mac stayed 2D for a week. Old v1 values are ignored on purpose.
+const STORE = 'wm3d-quality-v2';
+const SESSION_2D = 'wm3d-2d';            // give-up lasts for this tab session only
+const REMEMBER_MS = 24 * 3600 * 1000;    // a remembered 'mid'/'low' is re-checked (and can step up)
 const ORDER: Mode[] = ['high', 'mid', 'low', '2d'];
+const SLOW = 0.042;                      // median frame > 42 ms (< ~24 fps): step down
+const TOO_SLOW = 0.06;                   // > 60 ms (< ~17 fps): jump to low; at low: give up
+const FAST = 0.02;                       // < 20 ms (> 50 fps) for 3 windows: step back up
+
+/** Pure quality rule (exposed for tests). A steady 30 fps (33 ms) is fine: no change. */
+export function decideQuality(mode: Mode, med: number): Mode | null {
+  if (med <= SLOW) return null;
+  if (mode === 'low') return med > TOO_SLOW ? '2d' : null;
+  if (med > TOO_SLOW) return 'low';
+  return mode === 'high' ? 'mid' : 'low';
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -33,14 +47,22 @@ const state = {
   last: 0,
   frames: [] as number[],
   sinceSwitch: 0,
+  /** a remembered mid/low may climb back up; any step down in this session stops that */
+  canStepUp: false,
+  upWindows: 0,
+  decide: decideQuality,
 };
 
 function pickMode(): { mode: Mode; forced: boolean } {
   const q = new URLSearchParams(location.search).get('q');
   if (q === 'high' || q === 'mid' || q === 'low' || q === '2d') return { mode: q, forced: true };
   try {
+    if (sessionStorage.getItem(SESSION_2D)) return { mode: '2d', forced: false };
     const saved = JSON.parse(localStorage.getItem(STORE) || 'null');
-    if (saved && saved.until > Date.now() && ORDER.includes(saved.mode)) return { mode: saved.mode, forced: false };
+    if (saved && saved.until > Date.now() && (saved.mode === 'mid' || saved.mode === 'low')) {
+      state.canStepUp = true;
+      return { mode: saved.mode, forced: false };
+    }
   } catch { /* ignore */ }
   const c = document.createElement('canvas');
   const gl = c.getContext('webgl2');
@@ -54,7 +76,10 @@ function pickMode(): { mode: Mode; forced: boolean } {
 }
 
 function remember(mode: Mode) {
-  try { localStorage.setItem(STORE, JSON.stringify({ mode, until: Date.now() + REMEMBER_MS })); } catch { /* ignore */ }
+  try {
+    if (mode === 'high') localStorage.removeItem(STORE);
+    else localStorage.setItem(STORE, JSON.stringify({ mode, until: Date.now() + REMEMBER_MS }));
+  } catch { /* ignore */ }
 }
 
 function hide(o: Any) {
@@ -191,21 +216,40 @@ function frame(game: Phaser.Game) {
 function monitor(dt: number) {
   if (state.forced) return;
   state.sinceSwitch += dt;
-  if (state.sinceSwitch < 2.5 || dt > 0.25) return;           // shader warm-up, hidden tab
+  // shader warm-up, hidden/occluded tab, wake from sleep: don't judge those frames
+  if (state.sinceSwitch < 2.5 || dt > 0.25 || document.visibilityState !== 'visible') { if (dt > 0.25) state.frames = []; return; }
   state.frames.push(dt);
   const sum = state.frames.reduce((a, b) => a + b, 0);
   if (state.frames.length < 40 && sum < 1.5) return;
   const sorted = [...state.frames].sort((a, b) => a - b);
   const med = sorted[sorted.length >> 1];
   state.frames = [];
-  if (med <= 0.026) return;                                    // ~38 fps or better: fine
-  const next: Mode = med > 0.055 ? (state.mode === 'low' ? '2d' : 'low') : ORDER[ORDER.indexOf(state.mode) + 1];
-  if (next === '2d') { giveUp('slow'); return; }
-  state.mode = next;
-  state.stage!.setQuality(next);
-  state.sinceSwitch = 0;
-  if (next === 'low') remember('low');
-  console.info('[wm3d] quality ->', next, `(median frame ${(med * 1000).toFixed(0)} ms)`);
+  const next = decideQuality(state.mode, med);
+  if (next) {
+    state.canStepUp = false;
+    state.upWindows = 0;
+    if (next === '2d') { giveUp(`slow (median frame ${(med * 1000).toFixed(0)} ms at low)`); return; }
+    state.mode = next;
+    state.stage!.setQuality(next);
+    state.sinceSwitch = 0;
+    remember(next);
+    console.info('[wm3d] quality ->', next, `(median frame ${(med * 1000).toFixed(0)} ms)`);
+    return;
+  }
+  // a remembered lower tier that now runs fast climbs back up, one level per 3 fast windows
+  if (state.canStepUp && state.mode !== 'high' && state.mode !== '2d' && med < FAST) {
+    if (++state.upWindows >= 3) {
+      const up: Mode = state.mode === 'low' ? 'mid' : 'high';
+      state.mode = up;
+      state.stage!.setQuality(up);
+      state.sinceSwitch = 0;
+      state.upWindows = 0;
+      remember(up);
+      console.info('[wm3d] quality ->', up, `(median frame ${(med * 1000).toFixed(0)} ms)`);
+    }
+  } else {
+    state.upWindows = 0;
+  }
 }
 
 function giveUp(reason: string) {
@@ -218,7 +262,9 @@ function giveUp(reason: string) {
   state.cards?.clear();
   state.stage?.dispose();
   state.stage = null;
-  remember('2d');
+  // 2D only for this tab session; the next visit tries 3D again (at low after a slow give-up)
+  try { sessionStorage.setItem(SESSION_2D, '1'); } catch { /* ignore */ }
+  if (reason.startsWith('slow')) remember('low');
 }
 
 let fpsEl: HTMLDivElement | null = null;
@@ -267,7 +313,7 @@ export function start3D(game: Phaser.Game) {
       stage.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); giveUp('context lost'); });
     } catch (err) {
       console.warn('[wm3d] WebGL init failed', err);
-      remember('2d');
+      try { sessionStorage.setItem(SESSION_2D, '1'); } catch { /* ignore */ }
       return;
     }
     state.on = true;
