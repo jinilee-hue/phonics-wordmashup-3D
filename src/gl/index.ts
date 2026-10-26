@@ -3,8 +3,10 @@
 // word cards and the Gravity Zone are drawn here instead.  Any failure falls back to the 2D game.
 import Phaser from 'phaser';
 import { WordCard } from '../objects/WordCard';
+import { CARD_FACES } from './cardFaces';
 import { Cards3D, type LiveCard } from './cards3d';
-import { Stage, type Quality } from './stage';
+import { GATE_UV, Stage, type Quality } from './stage';
+import { DEPART, Travel } from './travel';
 import { Zone3D } from './zone3d';
 
 type Mode = Quality | '2d';
@@ -22,6 +24,9 @@ const state = {
   stage: null as Stage | null,
   cards: null as Cards3D | null,
   zone: null as Zone3D | null,
+  travel: null as Travel | null,
+  /** hide Phaser's cards while the camera is in flight (they wait at their slots) */
+  travelHide: false,
   scene: null as Any,
   hidden: new Set<Any>(),
   t0: performance.now(),
@@ -66,7 +71,7 @@ function unhideAll() {
 // Phaser skips a card only once its 3D twin is on screen, so nothing ever blinks out.
 const containerWillRender = Phaser.GameObjects.Container.prototype.willRender;
 (WordCard.prototype as Any).willRender = function (this: WordCard, cam: Phaser.Cameras.Scene2D.Camera) {
-  if (state.on && state.cards?.isReady(this)) return false;
+  if (state.on && (state.travelHide || state.cards?.isReady(this))) return false;
   return containerWillRender.call(this, cam);
 };
 
@@ -85,6 +90,19 @@ function attach(scene: Any) {
   for (const t of scene.neonCores ?? []) if (t.active) hide(t);
   state.zone!.place(scene.cx, scene.cy, scene.zoneR, stage.quality);
   state.cards!.clear();
+  state.travel?.cancel();
+  state.travelHide = false;
+  // between rounds: fly to the next place instead of sliding the new cards in
+  const startRound = scene.startRound;
+  if (!startRound.__wm3d) {
+    const wrapped = function (this: Any) {
+      const afterWin = scene.roundIndex > 0;          // create() resets it to 0 before round 1
+      startRound.call(scene);
+      if (afterWin && state.on && state.travel && !reducedMotion()) beginTravel(scene);
+    };
+    (wrapped as Any).__wm3d = true;
+    scene.startRound = wrapped;
+  }
   // the 2D hint draws its glow over the cards; redo it with a 3D glow behind them
   scene.showHint = () => showHint3D(scene);
   const impact = scene.playImpact;
@@ -93,6 +111,33 @@ function attach(scene: Any) {
     (wrapped as Any).__wm3d = true;
     scene.playImpact = wrapped;
   }
+}
+
+function reducedMotion() {
+  return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
+// The new round's cards already exist (Phaser made them); park them on their slots, block input,
+// fly the camera through the zone to the gate, then let the cards fly out of the gate.
+function beginTravel(scene: Any) {
+  const stage = state.stage!, travel = state.travel!, cards = state.cards!;
+  const order = [0, 1, 2].flatMap(i => [scene.leftCards[i], scene.rightCards[i]]).filter(Boolean);
+  for (const c of order) {
+    for (const tw of scene.tweens.getTweensOf(c)) {
+      if (tw.data?.some((d: Any) => d?.key === 'x')) tw.stop();      // the 2D slide-in
+    }
+    c.x = c.baseX;
+  }
+  scene.busy = true;
+  state.travelHide = true;
+  const round = scene.roundIndex;
+  const gate = stage.paintingPoint(GATE_UV.u, GATE_UV.v);
+  order.forEach((c: Any, i: number) => cards.arrive(c, gate, DEPART + 0.05 + i * 0.075, 0.8));
+  travel.start({
+    gate: () => gate,
+    onArrive: () => { state.travelHide = false; state.zone?.reform(); },
+    onDone: () => { if (scene.roundIndex === round && scene.sys.isActive()) scene.busy = false; },
+  });
 }
 
 // Same rules as GameScene.showHint, with the glow in 3D.
@@ -136,6 +181,7 @@ function frame(game: Phaser.Game) {
   state.zone!.place(s.cx, s.cy, s.zoneR, stage.quality);
   const pxPerUnit = stage.renderer.domElement.height / 2 / Math.tan((stage.camera.fov * Math.PI) / 360);
   state.zone!.update(t, dt, s.zoneGfx?.alpha ?? 1, pxPerUnit);
+  state.travel!.update(dt);
   stage.render(t, dt);
   monitor(dt);
   fpsMeter(dt);
@@ -165,6 +211,9 @@ function monitor(dt: number) {
 function giveUp(reason: string) {
   console.warn('[wm3d] falling back to 2D:', reason);
   state.on = false;
+  state.travel?.cancel();
+  state.travelHide = false;
+  if (state.scene) state.scene.busy = false;
   unhideAll();
   state.cards?.clear();
   state.stage?.dispose();
@@ -202,6 +251,19 @@ export function start3D(game: Phaser.Game) {
       state.stage = stage;
       state.cards = new Cards3D(stage);
       state.zone = new Zone3D(stage);
+      const travel = new Travel(stage);
+      state.travel = travel;
+      state.cards.clock = () => travel.elapsed();
+      state.cards.traveling = () => travel.active;
+      state.zone.clock = () => travel.elapsed();
+      // depth relief for the backdrop (the flight parallax); flat until it loads
+      const depth = new Image();
+      depth.onload = () => state.stage?.setDepth(depth);
+      depth.src = './gl/bg_depth.png';
+      // warm the HTTP cache with every card face, so a new round's faces are ready mid-flight
+      setTimeout(() => {
+        for (const k of Object.keys(CARD_FACES)) { const im = new Image(); im.src = `./gl/cards/${k}.webp`; }
+      }, 2500);
       stage.canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); giveUp('context lost'); });
     } catch (err) {
       console.warn('[wm3d] WebGL init failed', err);

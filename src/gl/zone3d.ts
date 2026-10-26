@@ -139,6 +139,9 @@ export class Zone3D {
   private vortex?: GlowPoints;
   private vortexSeed: { th: number; sp: number; ph: number; c: THREE.Color; s: number }[] = [];
   private flare = 0;
+  private reformT0 = -1;
+  /** clock (s) for the re-form animation; the travel clock, so frozen test frames stay in sync */
+  clock: () => number = () => performance.now() / 1000;
 
   constructor(private stage: Stage) {
     stage.scene.add(this.group);
@@ -156,6 +159,9 @@ export class Zone3D {
 
   /** A short brighten when two cards crash together in the zone. */
   pulse() { this.flare = 1; }
+
+  /** After the warp: the zone grows back from small with a flare. */
+  reform() { this.reformT0 = this.clock(); this.flare = 1; }
 
   private track<T extends THREE.Material & { opacity: number }>(m: T, base: number, heat = 0) {
     this.mats.push({ m, base, heat });
@@ -306,6 +312,16 @@ export class Zone3D {
   update(t: number, dt: number, alpha: number, pxPerUnit: number) {
     if (!this.built) return;
     const R = this.R;
+    let sc = 1;
+    if (this.reformT0 >= 0) {
+      const p = (this.clock() - this.reformT0) / 0.65;
+      if (p >= 1) this.reformT0 = -1;
+      else {
+        const c1 = 1.70158, c3 = c1 + 1, x = p - 1;
+        sc = 0.25 + 0.75 * (1 + c3 * x * x * x + c1 * x * x);   // easeOutBack
+      }
+    }
+    this.group.scale.setScalar(sc);
     const pulse = 0.5 + 0.5 * Math.sin(t * 2.2);
     const shimmer = 0.85 + 0.15 * Math.sin(t * 9.0);
     const heat = pulse * shimmer;

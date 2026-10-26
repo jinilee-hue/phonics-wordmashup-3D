@@ -9,3 +9,5 @@ Run against the dev server (`실행.command` or `npx vite --port 5183`). Screens
 - `uv run --with playwright python tools/qa/zone_shot.py URL out.png [WxH] [dpr]` — one settled still
 
 Always pass `?q=high`: on SwiftShader the auto quality judge would fall back to 2D.
+- `uv run --with playwright python tools/qa/wm3d_travel.py URL tag [--full] [--reduced]` — round-to-round travel: frozen-clock stills, round 2/3 playable, full game to the finale, reduced-motion path
+- `uv run --with playwright python tools/qa/travel_video.py URL out.mp4` — preview video of the travel (frozen clock, 30 fps, needs ffmpeg)

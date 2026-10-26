@@ -23,6 +23,9 @@ export type Side = 'left' | 'right';
 export const debug = { front: new URLSearchParams(location.search).has('cal') };
 export interface LiveCard { card: WordCard; side: Side }
 type Pointer = { x: number; y: number; down: boolean } | null;
+/** Travel arrival: fly from `from` (world) to the card's slot, starting at travel-clock `at` (s). */
+type Arrival = { from: THREE.Vector3; at: number; dur: number };
+const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3);
 
 function roundedRect(w: number, h: number, r: number) {
   const s = new THREE.Shape();
@@ -62,6 +65,7 @@ class Card3D {
   phase = Math.random() * 100;
   hintUntil = 0; hintStart = 0;
   hint?: THREE.Group;
+  arr: Arrival | null = null;
 
   constructor(readonly side: Side, readonly word: string,
     geo: { body: THREE.BufferGeometry; face: THREE.BufferGeometry; plane: THREE.BufferGeometry },
@@ -115,6 +119,12 @@ export class Cards3D {
   private haze = hazeTexture(256);
   private anisotropy = 4;
   private frame = 0;
+  private pending = new Map<WordCard, Arrival>();
+  /** travel clock (s) and whether a travel is running; set by the 3D bootstrap */
+  clock: () => number = () => 0;
+  traveling: () => boolean = () => false;
+  private ctrl = new THREE.Vector3();
+  private to = new THREE.Vector3();
 
   constructor(private stage: Stage) {
     stage.scene.add(this.group);
@@ -155,6 +165,13 @@ export class Cards3D {
     }
     e.used = this.frame;
     return e.t;
+  }
+
+  /** Queue a fly-in from `from` for this card (applied when its 3D twin exists). */
+  arrive(card: WordCard, from: THREE.Vector3, at: number, dur: number) {
+    const a = { from: from.clone(), at, dur };
+    const c = this.cards.get(card);
+    if (c) c.arr = a; else this.pending.set(card, a);
   }
 
   /** Is the 3D twin of this Phaser card on screen (so Phaser may skip drawing it)? */
@@ -205,11 +222,14 @@ export class Cards3D {
         this.cards.set(card, created);
         this.group.add(created.root);
       }
+      const pa = this.pending.get(card);
+      if (pa) { c.arr = pa; this.pending.delete(card); }
       this.update(c, card, pointer, t, dt);
     }
     for (const [card, c] of this.cards) {
       if (!live.has(card) || !card.active) { c.dispose(); this.cards.delete(card); }
     }
+    for (const card of this.pending.keys()) if (!card.active) this.pending.delete(card);
     // free GPU memory for faces not used for a while (each round shows 6 of 52)
     if (this.frame % 300 === 0) {
       for (const [k, e] of this.tex) {
@@ -266,6 +286,7 @@ export class Cards3D {
     c.shadow.rotation.z = c.roll.x;
     c.shadow.scale.set(FW * this.shadowTex.sx * (1 + lift / 520), FH * this.shadowTex.sy * (1 + lift / 520), 1);
     c.shadowMat.opacity = 0.3 * alpha * alpha * (1 - Math.min(lift, 220) / 440);
+    if (c.arr) this.flyIn(c);
     // hint glow: blink like the 2D one (260 ms yoyo x5)
     if (c.hint) {
       const now = performance.now();
@@ -281,8 +302,33 @@ export class Cards3D {
     }
   }
 
+  // Out of the gate: a bezier arc toward the viewer, landing on the slot, with one flip.
+  private flyIn(c: Card3D) {
+    const a = c.arr!;
+    const p = (this.clock() - a.at) / a.dur;
+    if (!this.traveling() || p >= 1) { c.arr = null; return; }
+    if (p < 0) { c.root.visible = false; return; }
+    const e = easeOutCubic(p);
+    const to = this.to.copy(c.root.position);
+    const H = this.stage.H, dist = this.stage.dist;
+    this.ctrl.copy(a.from).lerp(to, 0.55);
+    this.ctrl.y += H * 0.16;
+    this.ctrl.z = to.z + dist * 0.22;
+    const u = 1 - e;
+    c.root.position.set(
+      u * u * a.from.x + 2 * u * e * this.ctrl.x + e * e * to.x,
+      u * u * a.from.y + 2 * u * e * this.ctrl.y + e * e * to.y,
+      u * u * a.from.z + 2 * u * e * this.ctrl.z + e * e * to.z,
+    );
+    c.spin.rotation.y += u * Math.PI * 2 * (c.side === 'left' ? -1 : 1);
+    const fade = Math.min(1, p / 0.12);
+    c.setOpacity(Math.min(c.faceMat.opacity, fade));
+    c.shadowMat.opacity *= e * e;
+  }
+
   clear() {
     for (const c of this.cards.values()) c.dispose();
     this.cards.clear();
+    this.pending.clear();
   }
 }
