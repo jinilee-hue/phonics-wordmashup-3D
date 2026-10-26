@@ -98,6 +98,10 @@ class Card3D {
   yaw: Spring; pitch = new Spring(-pose.pitch * D2R); roll = new Spring(0, 200, 0.8);
   px = NaN; py = NaN; vx = 0; vy = 0;
   phase = Math.random() * 100;
+  /** time (sync clock) the crash started, see Cards3D.scuffle */
+  fight: number | null = null;
+  /** the matched pair sliding together, see Cards3D.meet */
+  meet: { cx: number; from: number } | null = null;
   hintUntil = 0; hintStart = 0;
   hint?: THREE.Group;
   arr: Arrival | null = null;
@@ -162,6 +166,7 @@ export class Cards3D {
   traveling: () => boolean = () => false;
   private ctrl = new THREE.Vector3();
   private to = new THREE.Vector3();
+  private now = 0;
   readonly pose = pose;
   private eul = new THREE.Euler(0, 0, 0, 'YXZ');
   private qBase = new THREE.Quaternion();
@@ -252,6 +257,7 @@ export class Cards3D {
 
   sync(list: LiveCard[], pointer: Pointer, t: number, dt: number) {
     this.frame++;
+    this.now = t;
     const live = new Set<WordCard>();
     for (const { card, side } of list) {
       live.add(card);
@@ -318,8 +324,30 @@ export class Cards3D {
     if (debug.front) { yawT = 0; pitchT = 0; rollT = 0; }
     const zT = dragging ? 120 : inZone ? 46 : hovered ? 30 : 0;
     const z = c.z.step(zT, sdt);
-    const relY = c.yaw.step(yawT, sdt), relX = c.pitch.step(pitchT, sdt), roll = c.roll.step(rollT, sdt);
-    this.stage.toWorld(card.x, card.y, z, c.root.position);
+    let relY = c.yaw.step(yawT, sdt), roll = c.roll.step(rollT, sdt);
+    const relX = c.pitch.step(pitchT, sdt);
+    let jx = 0, jy = 0, jz = 0;
+    if (c.meet) {
+      // Phaser slides the pair to cx -/+ 18 (overlapping); in 3D they meet edge to edge and lean into a V
+      const u = THREE.MathUtils.clamp(1 - (Math.abs(card.x - c.meet.cx) - 18) / Math.max(1, c.meet.from - 18), 0, 1);
+      const touch = c.meet.cx - sign * (FW * 0.5 * card.scaleX * 0.9 - 4);
+      jx = THREE.MathUtils.lerp(c.meet.cx - sign * c.meet.from, touch, u) - card.x;
+      relY += sign * 0.3 * u;
+    }
+    if (c.fight !== null) {
+      // the crash (intro video): a scuffle inside the fight cloud, then pushing against each other
+      const a = t - c.fight;
+      const w = 1 - THREE.MathUtils.smoothstep(a, 0.72, 0.95), push = THREE.MathUtils.smoothstep(a, 0.8, 1.0);
+      const ph = c.phase;
+      // bump into each other (anti-phase, toward the middle), rock and bob; then press and tremble
+      jx += (sign * Math.abs(Math.sin(a * 17 + ph)) * 9 + Math.sin(a * 41 + ph) * 4) * w + sign * 4 * push;
+      jy += Math.sin(a * 29 + ph * 2.3) * 7 * w;
+      jz += Math.abs(Math.sin(a * 19 + ph)) * 30 * w;
+      relY += Math.sin(a * 21 + ph) * 0.18 * w + sign * 0.06 * push;
+      roll += Math.sin(a * 25 + ph * 1.3) * 0.16 * w + Math.sin(a * 70) * 0.012 * push;
+      if (a > 3) c.fight = null;
+    }
+    this.stage.toWorld(card.x + jx, card.y + jy, z + jz, c.root.position);
     const P = c.root.position, D = this.stage.dist;
     if (pose.world && !debug.front) {
       c.spin.rotation.set(PITCH_W + (relX + pose.pitch * D2R), sign * YAW_W + (relY - sign * pose.yaw * D2R), roll, 'YXZ');
@@ -382,6 +410,18 @@ export class Cards3D {
     const fade = Math.min(1, p / 0.12);
     c.setOpacity(Math.min(c.faceMat.opacity, fade));
     c.shadowMat.opacity *= e * e;
+  }
+
+  /** The matched pair slides together (GameScene.triggerCollision): in 3D they meet edge to edge. */
+  meet(card: WordCard, cx: number) {
+    const c = this.cards.get(card);
+    if (c) c.meet = { cx, from: Math.abs(card.x - cx) };
+  }
+
+  /** The crash (intro video): the card scuffles in the fight cloud, then pushes against the other one. */
+  scuffle(card: WordCard) {
+    const c = this.cards.get(card);
+    if (c) c.fight = this.now;
   }
 
   clear() {

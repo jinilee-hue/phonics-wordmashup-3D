@@ -426,7 +426,7 @@ export class Glee {
   runClock: () => number | null = () => null;
   /** tests: pin the clock (s) and/or place Glee explicitly */
   freezeAt: number | null = null;
-  override: { x: number; y: number; h: number; yaw?: number } | null = null;
+  override: { x: number; y: number; h: number; yaw?: number; pitch?: number } | null = null;
   reduced = false;
   visible = true;
   dragTarget: Pt | null = null;
@@ -857,7 +857,7 @@ export class Glee {
       for (const f of ['happy', 'sad', 'open', 'frown', 'o', 'blush'] as const) c[f] = ease(c[f], g[f], 14);
       c.lookX = ease(c.lookX, g.lookX, 12); c.lookY = ease(c.lookY, g.lookY, 12);
       F.gx = P.x; F.gy = P.y; F.scale = 1; F.jump = this.jump;
-      F.yaw = c.yaw; F.pitch = 0; F.lean = c.lean; F.sy = c.sy;
+      F.yaw = c.yaw; F.pitch = this.override?.pitch ?? 0; F.lean = c.lean; F.sy = c.sy;
       F.armL = c.armL; F.armR = c.armR;
       const tuck = this.act?.kind === 'twirl' ? clamp(this.jump / 0.13, 0, 1) : 0;
       F.footL.copy(FOOT_L).lerp(TUCK_L, tuck * 0.7); F.footR.copy(FOOT_R).lerp(TUCK_R, tuck * 0.7);

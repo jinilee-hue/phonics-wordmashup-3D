@@ -62,8 +62,12 @@ async def main():
         await touch_drag(*st['L'], st['cx'] - 10, st['cy'])
         await pg.wait_for_timeout(700)
         await touch_drag(*st['R'], st['cx'] + 10, st['cy'])
-        await pg.wait_for_timeout(5500)
-        r2 = await pg.evaluate('() => window.WM3D.scene.roundIndex')
+        # the win (collision, result card 2.4 s, travel) takes ~5.5 s of game time; SwiftShader is slower: poll
+        r2 = st['round']
+        for _ in range(60):
+            await pg.wait_for_timeout(250)
+            r2 = await pg.evaluate('() => window.WM3D.scene.roundIndex')
+            if r2 != st['round']: break
         await pg.screenshot(path=f'{OUT}/r_tablet.png')
         print('tablet touch: round', st['round'], '->', r2, 'errors', errs[:3])
         await ctx.close()

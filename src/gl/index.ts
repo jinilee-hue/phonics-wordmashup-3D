@@ -5,7 +5,9 @@ import Phaser from 'phaser';
 import { WordCard } from '../objects/WordCard';
 import { CARD_FACES } from './cardFaces';
 import { Cards3D, type LiveCard } from './cards3d';
+import { gameAudio } from '../audio';
 import { Glee } from './glee';
+import { Mashup } from './mashup';
 import { GATE_UV, Stage, type Quality } from './stage';
 import { DEPART, Travel } from './travel';
 import { Zone3D } from './zone3d';
@@ -42,12 +44,17 @@ const state = {
   travel: null as Travel | null,
   /** the tutor character (off with ?glee=off) */
   glee: null as Glee | null,
+  /** the card collision (fight cloud, pop, reveal) */
+  mashup: null as Mashup | null,
   /** hide Phaser's cards while the camera is in flight (they wait at their slots) */
   travelHide: false,
   scene: null as Any,
   hidden: new Set<Any>(),
   t0: performance.now(),
   last: 0,
+  /** tests: a fixed 3D time step (s) for frame-by-frame capture with game.loop asleep + game.step() */
+  fixedDt: null as number | null,
+  tFixed: 0,
   frames: [] as number[],
   sinceSwitch: 0,
   /** a remembered mid/low may climb back up; any step down in this session stops that */
@@ -159,13 +166,40 @@ function attach(scene: Any) {
   scene.showHint = () => showHint3D(scene);
   const impact = scene.playImpact;
   if (!impact.__wm3d) {
-    const wrapped = function (this: Any) { state.zone?.pulse(); state.glee?.react('cheer'); return impact.call(scene); };
+    const wrapped = function (this: Any) {
+      if (!state.on) return impact.call(scene);
+      state.zone?.pulse(); state.glee?.react('cheer');
+      return state.mashup ? crash3D(scene) : impact.call(scene);
+    };
     (wrapped as Any).__wm3d = true;
     scene.playImpact = wrapped;
   }
+  const showResult = scene.showResultCard;
+  if (!showResult.__wm3d) {
+    const wrapped = function (this: Any, pair: Any) {
+      return state.on && state.mashup ? resultGrows(scene, showResult, pair) : showResult.call(scene, pair);
+    };
+    (wrapped as Any).__wm3d = true;
+    scene.showResultCard = wrapped;
+  }
+  const reveal = scene.playCardReveal;
+  if (!reveal.__wm3d) {
+    const wrapped = function (this: Any, rx: number, ry: number, w: number, h: number) {
+      if (state.on && state.mashup) state.mashup.startReveal(rx, ry, w, h);
+      else reveal.call(scene, rx, ry, w, h);
+    };
+    (wrapped as Any).__wm3d = true;
+    scene.playCardReveal = wrapped;
+  }
+  // the result card leaves 2.4 s after the win (GameScene.onRoundWin): the rays and the rain stop with it
+  wrapOnce(scene, 'onRoundWin', () => scene.time.delayedCall(2400, () => state.mashup?.stopReveal()));
   wrapOnce(scene, 'onWrongMatch', () => state.glee?.react('wrong'));
-  wrapOnce(scene, 'triggerCollision', () => state.glee?.react('match'));
+  wrapOnce(scene, 'triggerCollision', () => {
+    state.glee?.react('match');
+    for (const c of [scene.selectedLeft, scene.selectedRight]) if (c?.active) state.cards?.meet(c, scene.cx);
+  });
   wrapOnce(scene, 'showFinale', () => state.glee?.react('finale'));
+  state.mashup?.clear();
   if (state.glee) {
     state.glee.reset();
     state.glee.reduced = reducedMotion();
@@ -175,6 +209,66 @@ function attach(scene: Any) {
 
 function reducedMotion() {
   return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
+// The card collision, after the intro video (replaces GameScene.playImpact's flash, 2D rays, poof,
+// ring and confetti). Phaser keeps the timing, the score and the result card; 3D draws the rest.
+//   0.00 s  contact: fight cloud, streaks, stars, confetti; the cards scuffle inside it
+//   ~0.9 s  the cloud breaks up: the two cards still pushing against each other
+//   1.10 s  a second pop swallows them (and they vanish under it), the cloud ring blows outward
+//   1.28 s  the compound card grows out of the middle (resultGrows) over glow, rays and confetti rain
+const CRASH = { pop: 1.1, out: 1.15, result: 1.28 };
+function crash3D(scene: Any) {
+  const CX = scene.cx, CY = scene.cy;
+  const pair = scene.queue[scene.roundIndex];
+  const L = scene.selectedLeft, R = scene.selectedRight;
+  const m = state.mashup!;
+  m.setQuality(state.stage!.quality, reducedMotion());
+  scene.cameras.main.shake(300, 0.007);
+  gameAudio.playBurst();
+  m.fight(CX, CY, Math.min(scene.gw, scene.gh));
+  for (const c of [L, R]) if (c?.active) state.cards?.scuffle(c);
+  scene.time.delayedCall(CRASH.pop * 1000, () => {
+    m.pop();
+    scene.cameras.main.shake(220, 0.005);
+    gameAudio.playBurst();
+  });
+  // gone while the heap covers them (GameScene's 350 ms pulseOut would still show when it opens)
+  scene.time.delayedCall(CRASH.out * 1000, () => {
+    for (const c of [L, R]) {
+      if (c?.active) scene.tweens.add({ targets: c, alpha: 0, duration: 70, onComplete: () => c.destroy() });
+    }
+  });
+  scene.time.delayedCall(CRASH.result * 1000, () => scene.showResultCard(pair));
+}
+
+// GameScene.showResultCard flips the card in edge-on from above; in the intro it grows out of the
+// middle of the cloud. Same card, same tween (and its onComplete -> onRoundWin), different start.
+function resultGrows(scene: Any, show: Any, pair: Any) {
+  const add = scene.add, tweens = scene.tweens;
+  const makeContainer = add.container, addTween = tweens.add;
+  let cont: Any = null;
+  add.container = function (...a: Any[]) {
+    const c = makeContainer.apply(add, a);
+    if (!cont) cont = c;
+    return c;
+  };
+  tweens.add = function (cfg: Any) {
+    if (cont && cfg && cfg.targets === cont && cfg.onComplete && cfg.scaleX === 1) {
+      cont.y = cfg.y;
+      cont.scaleX = cont.scaleY = 0.06;
+      cont.alpha = 1;
+      cfg.duration = 640;
+      cfg.ease = 'Back.easeOut';
+    }
+    return addTween.call(tweens, cfg);
+  };
+  try {
+    return show.call(scene, pair);
+  } finally {
+    delete add.container;
+    delete tweens.add;
+  }
 }
 
 // The new round's cards already exist (Phaser made them); park them on their slots, block input,
@@ -232,9 +326,10 @@ function frame(game: Phaser.Game) {
   const s = state.scene;
   if (!state.on || !s || !s.sys?.isActive()) return;
   const now = performance.now();
-  const t = (now - state.t0) / 1000;
-  const dt = state.last ? Math.min(0.1, (now - state.last) / 1000) : 1 / 60;
+  let t = (now - state.t0) / 1000;
+  let dt = state.last ? Math.min(0.1, (now - state.last) / 1000) : 1 / 60;
   state.last = now;
+  if (state.fixedDt) { dt = state.fixedDt; t = state.tFixed += dt; }
   const stage = state.stage!;
   const W = game.scale.width, H = game.scale.height;
   stage.resize(W, H);
@@ -258,6 +353,7 @@ function frame(game: Phaser.Game) {
     state.glee.dragTarget = d?.active ? { x: d.x, y: d.y } : null;
     state.glee.update(dt);
   }
+  state.mashup?.update(dt);
   stage.render(t, dt);
   monitor(dt);
   fpsMeter(dt);
@@ -283,6 +379,7 @@ function monitor(dt: number) {
     state.mode = next;
     state.stage!.setQuality(next);
     state.glee?.setQuality(next);
+    state.mashup?.setQuality(next, reducedMotion());
     state.sinceSwitch = 0;
     remember(next);
     console.info('[wm3d] quality ->', next, `(median frame ${(med * 1000).toFixed(0)} ms)`);
@@ -295,6 +392,7 @@ function monitor(dt: number) {
       state.mode = up;
       state.stage!.setQuality(up);
       state.glee?.setQuality(up);
+      state.mashup?.setQuality(up, reducedMotion());
       state.sinceSwitch = 0;
       state.upWindows = 0;
       remember(up);
@@ -315,6 +413,8 @@ function giveUp(reason: string) {
   state.cards?.clear();
   state.glee?.dispose();
   state.glee = null;
+  state.mashup?.dispose();
+  state.mashup = null;
   state.stage?.dispose();
   state.stage = null;
   // 2D only for this tab session; the next visit tries 3D again (at low after a slow give-up)
@@ -357,6 +457,8 @@ export function start3D(game: Phaser.Game) {
       state.cards.clock = () => travel.elapsed();
       state.cards.traveling = () => travel.active;
       state.zone.clock = () => travel.elapsed();
+      state.mashup = new Mashup(stage);
+      state.mashup.setQuality(stage.quality, reducedMotion());
       if (new URLSearchParams(location.search).get('glee') !== 'off') {
         state.glee = new Glee(stage);
         state.glee.runClock = () => (travel.active ? travel.elapsed() : null);
