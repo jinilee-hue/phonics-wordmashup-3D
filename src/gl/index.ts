@@ -8,9 +8,10 @@ import { Cards3D, type LiveCard } from './cards3d';
 import { gameAudio } from '../audio';
 import { Glee } from './glee';
 import { Mashup } from './mashup';
+import { Reward, type Gain, type Kind } from './reward';
 import { Tutor } from './tutor';
 import { GATE_UV, Stage, type Quality } from './stage';
-import { DEPART, Travel } from './travel';
+import { ARRIVE_AT, Travel } from './travel';
 import { Zone3D } from './zone3d';
 
 type Mode = Quality | '2d';
@@ -49,6 +50,10 @@ const state = {
   mashup: null as Mashup | null,
   /** Glee leading the game: voice lines, listening, pacing (off with ?tutor=off) */
   tutor: null as Tutor | null,
+  /** stars, coins and gems flying from the result card into the HUD (Phaser layer) */
+  reward: null as Reward | null,
+  /** while set, GameScene's countUp/bumpBadge are held back for the reward to replay when its icons arrive */
+  rewardHold: null as null | { calls: [Any, number, number][] },
   game: null as Phaser.Game | null,
   /** a press that landed on Glee: GameScene must not pick a card with it */
   gleePress: false,
@@ -217,6 +222,9 @@ function attach(scene: Any) {
     (wrapped as Any).__wm3d = true;
     scene.onRoundWin = wrapped;
   }
+  // score reward as in the intro: icons burst from the result card into "+N" chips, then up into the HUD
+  // (wraps the wrapper above, so the reveal still stops and Glee still holds the result card)
+  wireReward(scene);
   // a press on Glee pokes or spins her; it must not also grab the nearest card (GameScene picks by distance)
   const inp = scene.input;
   for (const fn of [...(inp.listeners('pointerdown') as Any[])]) {
@@ -251,6 +259,51 @@ function attach(scene: Any) {
     if (!state.tutor) state.glee.react('hello');          // the tutor waves as she says hi
   }
   state.tutor?.attach(scene);
+}
+
+function wireReward(scene: Any) {
+  state.reward?.stop();
+  state.reward = new Reward(scene);
+  const countUp = scene.countUp, bump = scene.bumpBadge, win = scene.onRoundWin;
+  if (win.__wm3dReward) return;
+  const cu = function (this: Any, txt: Any, from: number, to: number) {
+    if (state.rewardHold) { state.rewardHold.calls.push([txt, from, to]); txt.setText(`${from}`); return; }
+    return countUp.call(scene, txt, from, to);
+  };
+  const bb = function (this: Any, txt: Any) {
+    if (state.rewardHold) return;
+    return bump.call(scene, txt);
+  };
+  const rw = function (this: Any, card: Any) {
+    if (!state.on || reducedMotion() || !state.reward) return win.call(scene, card);
+    const hold = { calls: [] as [Any, number, number][] };
+    state.rewardHold = hold;
+    try { win.call(scene, card); } catch (err) { state.rewardHold = null; throw err; }
+    // GameScene bumps the other two badges 80 / 160 ms later: keep holding past that
+    scene.time.delayedCall(220, () => { if (state.rewardHold === hold) state.rewardHold = null; });
+    const kinds: [Kind, Any][] = [['score', scene.scoreText], ['coin', scene.coinText], ['gem', scene.gemText]];
+    const gains: Gain[] = [];
+    for (const [kind, txt] of kinds) {
+      const c = hold.calls.find(c => c[0] === txt);
+      if (!c) continue;
+      const k = parseFloat(String(txt.style?.fontSize ?? '22')) / 22;      // the HUD's sz() scale
+      gains.push({
+        kind, amount: c[2] - c[1],
+        hud: txt.active ? { x: txt.x - 76 * k, y: txt.y, size: 46 * k } : null,
+        arrive: () => { countUp.call(scene, txt, c[1], c[2]); bump.call(scene, txt); },
+      });
+    }
+    try {
+      state.reward.play(card, gains, state.glee?.screenBox() ?? null);
+    } catch (err) {
+      console.warn('[wm3d] reward', err);
+      for (const g of gains) g.arrive();
+    }
+  };
+  for (const [name, f] of [['countUp', cu], ['bumpBadge', bb], ['onRoundWin', rw]] as const) {
+    (f as Any).__wm3dReward = true;
+    scene[name] = f;
+  }
 }
 
 function reducedMotion() {
@@ -332,10 +385,16 @@ function beginTravel(scene: Any) {
   state.travelHide = true;
   const round = scene.roundIndex;
   const gate = stage.paintingPoint(GATE_UV.u, GATE_UV.v);
-  order.forEach((c: Any, i: number) => cards.arrive(c, gate, DEPART + 0.05 + i * 0.075, 0.8));
+  // once the footage has settled, the next cards fly in from the sides (intro 2.4-2.7 s)
+  order.forEach((c: Any, i: number) => {
+    const left = scene.leftCards.includes(c);
+    const from = stage.toWorld(left ? -0.22 * stage.W : 1.22 * stage.W, c.baseY, 0);
+    cards.arrive(c, from, ARRIVE_AT - 0.06 + Math.floor(i / 2) * 0.07 + (left ? 0 : 0.03), 0.42, 'side');
+  });
   travel.start({
     gate: () => gate,
-    onArrive: () => { state.travelHide = false; state.zone?.reform(); },
+    onArrive: () => { state.travelHide = false; state.zone?.hide(); },
+    onRest: () => state.zone?.reform(),
     onDone: () => { if (scene.roundIndex === round && scene.sys.isActive()) scene.busy = false; },
   });
 }

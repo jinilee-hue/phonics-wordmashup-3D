@@ -46,7 +46,7 @@ export const debug = { front: new URLSearchParams(location.search).has('cal') };
 export interface LiveCard { card: WordCard; side: Side }
 type Pointer = { x: number; y: number; down: boolean } | null;
 /** Travel arrival: fly from `from` (world) to the card's slot, starting at travel-clock `at` (s). */
-type Arrival = { from: THREE.Vector3; at: number; dur: number };
+type Arrival = { from: THREE.Vector3; at: number; dur: number; style: 'gate' | 'side' };
 const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3);
 /**
  * Material settings for things that sit BEHIND a card (drop shadow, hint halo): blended, but drawn in
@@ -216,8 +216,8 @@ export class Cards3D {
   }
 
   /** Queue a fly-in from `from` for this card (applied when its 3D twin exists). */
-  arrive(card: WordCard, from: THREE.Vector3, at: number, dur: number) {
-    const a = { from: from.clone(), at, dur };
+  arrive(card: WordCard, from: THREE.Vector3, at: number, dur: number, style: 'gate' | 'side' = 'gate') {
+    const a = { from: from.clone(), at, dur, style };
     const c = this.cards.get(card);
     if (c) c.arr = a; else this.pending.set(card, a);
   }
@@ -393,19 +393,21 @@ export class Cards3D {
     const p = (this.clock() - a.at) / a.dur;
     if (!this.traveling() || p >= 1) { c.arr = null; return; }
     if (p < 0) { c.root.visible = false; return; }
-    const e = easeOutCubic(p);
+    const side = a.style === 'side';
+    // from the side (intro 2.4-2.7 s): a quick slide with a little overshoot; from the gate: an arc toward the viewer
+    const e = side ? 1 + 2.2 * Math.pow(p - 1, 3) + 1.2 * Math.pow(p - 1, 2) : easeOutCubic(p);
     const to = this.to.copy(c.root.position);
     const H = this.stage.H, dist = this.stage.dist;
-    this.ctrl.copy(a.from).lerp(to, 0.55);
-    this.ctrl.y += H * 0.16;
-    this.ctrl.z = to.z + dist * 0.22;
+    this.ctrl.copy(a.from).lerp(to, side ? 0.6 : 0.55);
+    this.ctrl.y += H * (side ? 0.05 : 0.16);
+    this.ctrl.z = to.z + dist * (side ? 0.06 : 0.22);
     const u = 1 - e;
     c.root.position.set(
       u * u * a.from.x + 2 * u * e * this.ctrl.x + e * e * to.x,
       u * u * a.from.y + 2 * u * e * this.ctrl.y + e * e * to.y,
       u * u * a.from.z + 2 * u * e * this.ctrl.z + e * e * to.z,
     );
-    this.qRoll.setFromAxisAngle(this.yAxis, u * Math.PI * 2 * (c.side === 'left' ? -1 : 1));
+    this.qRoll.setFromAxisAngle(this.yAxis, u * Math.PI * (side ? 0.5 : 2) * (c.side === 'left' ? -1 : 1));
     c.spin.quaternion.multiply(this.qRoll);
     const fade = Math.min(1, p / 0.12);
     c.setOpacity(Math.min(c.faceMat.opacity, fade));

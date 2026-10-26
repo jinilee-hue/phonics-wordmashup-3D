@@ -76,6 +76,27 @@ export class Stage {
     this.scene.add(this.key, this.key.target);
   }
 
+  private clipU = {
+    uClip: { value: null as THREE.Texture | null },
+    uClipMix: { value: 0 },
+    uClipRect: { value: new THREE.Vector4(0, 0, 1, 1) },
+    uClipGain: { value: new THREE.Vector3(1, 1, 1) },
+    uClipOffs: { value: new THREE.Vector3(0, 0, 0) },
+  };
+
+  /** Footage over the backdrop: `rect` in CSS px (top-left origin), `mix` 0..1, colour graded by gain/offset (sRGB). */
+  setClip(tex: THREE.Texture | null, mix: number, rect?: { x: number; y: number; w: number; h: number },
+    grade?: { gain: [number, number, number]; offs: [number, number, number] }) {
+    const u = this.clipU;
+    u.uClip.value = tex;
+    u.uClipMix.value = tex ? mix : 0;
+    if (rect) {
+      const pr = this.renderer.getPixelRatio(), Hd = this.renderer.domElement.height;
+      u.uClipRect.value.set(rect.x * pr, Hd - (rect.y + rect.h) * pr, rect.w * pr, rect.h * pr);
+    }
+    if (grade) { u.uClipGain.value.set(...grade.gain); u.uClipOffs.value.set(...grade.offs); }
+  }
+
   /** Use Phaser's already-loaded game_bg image as the backdrop (no second download). */
   setBackdrop(img: HTMLImageElement | HTMLCanvasElement) {
     const tex = new THREE.Texture(img);
@@ -84,10 +105,26 @@ export class Stage {
     tex.needsUpdate = true;
     this.bgAspect = img.width / img.height;
     if (!this.bg) {
-      this.bg = new THREE.Mesh(
-        new THREE.PlaneGeometry(1, 1, SEG_X, SEG_Y),
-        new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }),
-      );
+      const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
+      // the arrival footage (travel.ts) is mixed into the backdrop in screen space, so it sits behind
+      // everything else exactly like the painting does
+      mat.onBeforeCompile = sh => {
+        Object.assign(sh.uniforms, this.clipU);
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', `#include <common>
+uniform sampler2D uClip;
+uniform float uClipMix;
+uniform vec4 uClipRect;
+uniform vec3 uClipGain;
+uniform vec3 uClipOffs;`)
+          .replace('#include <map_fragment>', `#include <map_fragment>
+if (uClipMix > 0.0) {
+  vec2 cuv = clamp((gl_FragCoord.xy - uClipRect.xy) / uClipRect.zw, 0.0, 1.0);
+  vec3 v = clamp(texture2D(uClip, cuv).rgb * uClipGain + uClipOffs, 0.0, 1.0);   // graded to the painting
+  diffuseColor.rgb = mix(diffuseColor.rgb, pow(v, vec3(2.2)), uClipMix);          // sRGB -> linear
+}`);
+      };
+      this.bg = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, SEG_X, SEG_Y), mat);
       this.bg.renderOrder = -10;
       this.bg.frustumCulled = false;
       this.scene.add(this.bg);

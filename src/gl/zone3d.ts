@@ -1,15 +1,19 @@
-// The Gravity Zone as a 3D "gravity well".
-//
-// Same motifs and colours as the 2D zone (pink/cyan neon rings, tick ring, comets, GRAVITY/ZONE
-// text, radial floor grid), rebuilt in depth: the floor grid bends into a funnel, the two inner
-// rings swing like a gyroscope, and particles spiral down the well.
+// The Gravity Zone, as in the game's intro video (user: "gravityzone도 인트로와 같게 만들어줘"):
+// an upright neon badge hovering over the stage - a deep violet disc you can faintly see through, a thick
+// hot-pink neon ring with plasma wisps crackling round it, a thin lavender inner ring, "Gravity / Zone" in
+// white rounded letters with a soft glow, twinkles on the ring, and sparkles rising from the neon floor rings
+// that the backdrop painting already has under it. After a warp it rises up out of the floor (reform()).
+// Gameplay keeps GameScene's zone (cx, cy, zoneR): the badge is drawn behind the cards that land in it.
 import * as THREE from 'three';
 import type { Quality, Stage } from './stage';
-import { dotTexture, hazeTexture, neonTextTexture, ringGlowTexture } from './textures';
+import { dotTexture } from './textures';
 
-const PINK = '#FF2DA0';
-const CYAN = '#00E0FF';
-const MAGENTA = '#FF5BFD';
+const PINK = '#FF4FD3';
+const CYAN = '#5BE7FF';
+/** the neon floor rings painted under the zone (painting coords, measured on game_bg.png) */
+const FLOOR = { u: 0.5, v: 0.795, ru: 0.13, rv: 0.05 };
+const BADGE = 0.86;                    // badge radius / zoneR
+const INNER = 0.85;                    // thin inner ring radius / badge radius (intro: 93 / 113 px)
 
 const POINT_VS = /* glsl */`
 attribute float aSize;
@@ -35,40 +39,85 @@ void main() {
   gl_FragColor = vec4(vColor * t.rgb, t.a * vAlpha * uOpacity);
 }`;
 
-const FUNNEL_VS = /* glsl */`
-varying vec3 vLocal;
+const NOISE = /* glsl */`
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * noise(p); p *= 2.03; a *= 0.5; } return s; }
+`;
+const LOCAL_VS = /* glsl */`
+varying vec2 vP;
 void main() {
-  vLocal = position;
+  vP = position.xy;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
-const FUNNEL_FS = /* glsl */`
+// the disc: dark indigo glass - navy at the top, plum toward the bottom where the stage shows faintly through
+// (sampled from the intro: top ~(50,58,111), bottom ~(86,45,83) over the stage)
+const DISC_FS = /* glsl */`
 uniform float uR;
 uniform float uTime;
 uniform float uOpacity;
 uniform float uHeat;
-uniform vec3 uLine;
-uniform vec3 uHole;
-uniform vec3 uPink;
-varying vec3 vLocal;
-float lineAA(float x, float px) {
-  float d = abs(fract(x + 0.5) - 0.5);
-  float w = fwidth(x);
-  return 1.0 - smoothstep(w * (px - 0.6), w * (px + 0.6), d);
-}
+varying vec2 vP;
+${NOISE}
 void main() {
-  float r = length(vLocal.xz) / uR;
-  float th = atan(vLocal.z, vLocal.x);
-  // 12 spokes, slightly twisted like a drain; rings flow inward (log spacing = constant on screen)
-  float spokes = lineAA((th + 0.28 / max(r, 0.18)) * 12.0 / 6.2831853, 1.3);
-  float rings = lineAA(log(max(r, 1e-3)) * 3.4 + uTime * 0.42, 1.5);
-  float outer = 1.0 - smoothstep(1.35, 1.9, r);
-  float inner = smoothstep(0.16, 0.42, r);
-  float lines = max(spokes * 0.55, rings) * outer * inner;
-  float hole = 1.0 - smoothstep(0.12, 0.85, r);
-  vec3 col = mix(uHole, uLine, lines);
-  col = mix(col, uPink, (1.0 - smoothstep(0.0, 0.08, abs(r - 0.52))) * 0.6 * lines);
-  float a = max(hole * 0.55, lines * (0.55 + 0.3 * uHeat));
-  gl_FragColor = vec4(col, a * uOpacity);
+  float r = length(vP) / uR;
+  if (r > 1.0) discard;
+  float th = atan(vP.y, vP.x);
+  float v = vP.y / uR;                                          // +1 top .. -1 bottom
+  vec3 top = vec3(0.10, 0.12, 0.36), bot = vec3(0.26, 0.11, 0.32);
+  vec3 c = mix(bot, top, smoothstep(-0.9, 0.7, v));
+  float swirl = fbm(vec2(th * 1.3 + uTime * 0.18 - r * 2.0, r * 2.4 - uTime * 0.25));
+  c += vec3(0.16, 0.08, 0.26) * smoothstep(0.5, 0.9, swirl) * (0.4 + 0.6 * r) * (0.8 + 0.3 * uHeat);
+  c = mix(c, vec3(0.55, 0.22, 0.62), smoothstep(0.80, 1.0, r) * 0.55);   // pink light bleeding in from the ring
+  float a = mix(0.74, 0.93, smoothstep(-0.8, 0.5, v));         // more see-through low down
+  a = mix(a, 0.95, smoothstep(0.85, 1.0, r)) * (1.0 - smoothstep(0.99, 1.0, r));
+  gl_FragColor = vec4(c, a * uOpacity);
+}`;
+// the neon ring as in the intro: a thin white-hot tube with a pink glow, a thin lavender ring inside it and pink
+// plasma arcs crackling round the outside. Composited front-to-back in premultiplied alpha (normal blending):
+// an additive glow turned white over the bright sky.
+const RING_FS = /* glsl */`
+uniform float uR;
+uniform float uRi;
+uniform float uTime;
+uniform float uOpacity;
+uniform float uHeat;
+varying vec2 vP;
+${NOISE}
+vec4 over(vec4 dst, vec3 c, float a) { return vec4(c * a + dst.rgb * (1.0 - a), a + dst.a * (1.0 - a)); }
+void main() {
+  float r = length(vP);
+  float th = atan(vP.y, vP.x);
+  float d = (r - uR) / uR, di = (r - uRi) / uR;
+  float heat = 0.85 + 0.3 * uHeat;
+  float glow = d < 0.0 ? exp(-pow(d / 0.11, 2.0)) * 0.85
+                       : exp(-pow(d / 0.17, 2.0)) * 0.82 + exp(-pow(d / 0.36, 2.0)) * 0.34;
+  float core = exp(-pow(d / 0.042, 2.0));
+  float iglow = exp(-pow(di / 0.06, 2.0)) * 0.6;
+  float icore = exp(-pow(di / 0.02, 2.0)) * 0.8;
+  float s = 0.0;
+  for (int k = 0; k < 3; k++) {
+    float fk = float(k);
+    float off = fbm(vec2(th * (2.2 + fk) + fk * 7.0, uTime * (0.8 + 0.3 * fk) + fk * 3.1)) * 0.3 - 0.04;
+    float dd = abs(d - off);
+    float w = 0.02 + 0.012 * fk;
+    float gate = smoothstep(0.3, 0.62, noise(vec2(th * 2.6 + fk * 5.0, uTime * 0.6 + fk)));   // arcs come and go
+    s += exp(-dd * dd / (w * w)) * gate * (0.95 - 0.2 * fk);
+  }
+  s = clamp(s, 0.0, 1.0);
+  vec3 pink = vec3(1.0, 0.56, 0.9), haze = vec3(0.86, 0.58, 1.0), hot = vec3(1.0, 0.66, 0.94);
+  vec3 lav = vec3(0.72, 0.5, 1.0), white = vec3(1.0, 0.95, 1.0);
+  vec4 acc = vec4(0.0);
+  acc = over(acc, mix(pink, haze, smoothstep(0.05, 0.3, abs(d))), clamp(glow * heat, 0.0, 1.0));
+  acc = over(acc, mix(pink, white, s * 0.55), s * 0.8);
+  acc = over(acc, lav, iglow);
+  acc = over(acc, vec3(0.92, 0.84, 1.0), icore);
+  acc = over(acc, mix(hot, white, smoothstep(0.35, 0.9, core)), clamp(core * 1.15, 0.0, 1.0));
+  gl_FragColor = acc * uOpacity;                                  // premultiplied
 }`;
 
 /** A batch of soft additive points whose position/colour/size/alpha are written on the CPU. */
@@ -109,45 +158,65 @@ const disp = (hex: string) => new THREE.Color().setRGB(
   THREE.LinearSRGBColorSpace,
 );
 
-function basic(color: string, opacity: number, additive = true, map?: THREE.Texture) {
-  const m = new THREE.MeshBasicMaterial({
-    color: new THREE.Color(color), transparent: true, opacity, depthWrite: false, toneMapped: false,
-    blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
-  });
-  if (map) m.map = map;
-  return m;
+/** "Gravity / Zone" as in the intro: heavy rounded letters, white with a cool cyan tint and a soft cyan glow */
+function badgeTextTexture(px: number) {
+  const lines = ['Gravity', 'Zone'];
+  const font = `800 ${px}px "Baloo 2", "Fredoka", sans-serif`;
+  const c = document.createElement('canvas');
+  const g0 = c.getContext('2d')!;
+  g0.font = font;
+  const textW = Math.max(...lines.map(l => g0.measureText(l).width));
+  const pad = Math.round(px * 0.5);
+  const w = Math.ceil(textW + pad * 2);
+  const lh = px * 0.92, h = Math.ceil(lh * lines.length + pad * 2);
+  c.width = w; c.height = h;
+  const g = c.getContext('2d')!;
+  g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const y0 = h / 2 - (lh * (lines.length - 1)) / 2 + px * 0.05;
+  const draw = (fill: string, blur: number, color: string, dy = 0) => {
+    g.save();
+    g.shadowColor = color; g.shadowBlur = blur; g.shadowOffsetY = dy; g.fillStyle = fill;
+    lines.forEach((l, i) => g.fillText(l, w / 2, y0 + i * lh));
+    g.restore();
+  };
+  draw('rgba(120,215,255,0.55)', px * 0.42, 'rgba(110,210,255,0.95)');        // soft cyan glow
+  draw('rgba(20,10,70,0.55)', px * 0.06, 'rgba(20,0,60,0.7)', px * 0.04);    // contact shadow
+  draw('#EAFBFF', px * 0.08, 'rgba(190,240,255,0.9)');                        // the letters
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return { tex, w, h, textW };
 }
+
+type Floater = { th: number; r: number; ph: number; sp: number; c: THREE.Color; s: number };
+type Riser = { u: number; ph: number; sp: number; rise: number; c: THREE.Color; s: number };
 
 export class Zone3D {
   readonly group = new THREE.Group();
+  private badge = new THREE.Group();
   private R = 0;
   private built = false;
   private quality: Quality = 'high';
   private dot = dotTexture(64);
-  private haze = hazeTexture(256);
-  private glowWide = ringGlowTexture(512, 0.8, 0.075);
-  private glowTight = ringGlowTexture(512, 0.8, 0.03);
-  // parts
   private mats: { m: THREE.Material & { opacity: number }; base: number; heat: number }[] = [];
-  private midRing = new THREE.Group();
-  private innerRing = new THREE.Group();
-  private spin = new THREE.Group();
-  private wellG = new THREE.Group();
-  private funnelMat?: THREE.ShaderMaterial;
-  private texts: THREE.Mesh[] = [];
-  private comets?: GlowPoints;
-  private vortex?: GlowPoints;
-  private vortexSeed: { th: number; sp: number; ph: number; c: THREE.Color; s: number }[] = [];
+  private shaders: THREE.ShaderMaterial[] = [];
+  private text?: THREE.Mesh;
+  private twinkles?: GlowPoints;
+  private twSeed: Floater[] = [];
+  private sparks?: GlowPoints;
+  private spSeed: Riser[] = [];
+  private floor = new THREE.Vector3();
+  private floorR = { x: 150, y: 30 };
   private flare = 0;
   private reformT0 = -1;
-  /** clock (s) for the re-form animation; the travel clock, so frozen test frames stay in sync */
+  private v = new THREE.Vector3();
+  /** clock (s) for the rise-up animation; the travel clock, so frozen test frames stay in sync */
   clock: () => number = () => performance.now() / 1000;
 
   constructor(private stage: Stage) {
     stage.scene.add(this.group);
+    this.group.add(this.badge);
   }
-
-  well(r: number) { return -this.R * 0.95 / (1 + (r / (0.42 * this.R)) ** 2); }
 
   place(cx: number, cy: number, R: number, quality: Quality) {
     if (!this.built || Math.abs(R - this.R) > 0.5 || quality !== this.quality) {
@@ -155,13 +224,23 @@ export class Zone3D {
       this.build(R);
     }
     this.stage.toWorld(cx, cy, -25, this.group.position);
+    // the painted floor rings: where the painting puts them on screen (rest camera), relative to the badge
+    const st = this.stage, p = st.paintingPoint(FLOOR.u, FLOOR.v, this.v).project(st.overlayCam);
+    const fx = ((p.x + 1) / 2) * st.W, fy = ((1 - p.y) / 2) * st.H;
+    this.floor.set(fx - cx, cy - fy, 0);
+    const q = st.paintingPoint(FLOOR.u + FLOOR.ru, FLOOR.v + FLOOR.rv, this.v).project(st.overlayCam);
+    this.floorR.x = Math.max(40, ((q.x + 1) / 2) * st.W - fx);
+    this.floorR.y = Math.max(10, ((1 - q.y) / 2) * st.H - fy);
   }
 
   /** A short brighten when two cards crash together in the zone. */
   pulse() { this.flare = 1; }
 
-  /** After the warp: the zone grows back from small with a flare. */
-  reform() { this.reformT0 = this.clock(); this.flare = 1; }
+  /** The badge rises up out of the floor (after a warp, and at the start). */
+  reform() { this.reformT0 = this.clock(); this.flare = 1; this.group.visible = true; }
+
+  /** Gone while the arrival footage plays (it rises again with reform()). */
+  hide() { this.group.visible = false; }
 
   private track<T extends THREE.Material & { opacity: number }>(m: T, base: number, heat = 0) {
     this.mats.push({ m, base, heat });
@@ -169,213 +248,131 @@ export class Zone3D {
   }
 
   private build(R: number) {
-    for (const c of [...this.group.children]) {
+    for (const c of [...this.badge.children, ...this.group.children.filter(c => c !== this.badge)]) {
       c.removeFromParent();
       c.traverse(o => { const mesh = o as THREE.Mesh; mesh.geometry?.dispose(); });
     }
     this.mats.forEach(e => e.m.dispose());
-    this.mats = [];
-    this.funnelMat?.dispose();
-    this.texts = [];
-    this.midRing = new THREE.Group();
-    this.innerRing = new THREE.Group();
-    this.spin = new THREE.Group();
-    this.wellG = new THREE.Group();
+    this.shaders.forEach(m => m.dispose());
+    this.mats = []; this.shaders = [];
     this.R = R;
-    const g = this.group;
+    const Rb = R * BADGE, b = this.badge;
 
-    // ── haze (bloom fill) behind everything ─────────────────────────────────
-    const hazeP = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.track(basic(PINK, 0, true, this.haze), 0.05, 0.12));
-    hazeP.scale.setScalar(R * 3.4); hazeP.position.z = -R * 0.3;
-    const hazeC = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.track(basic(CYAN, 0, true, this.haze), 0.04, 0.09));
-    hazeC.scale.setScalar(R * 2.8); hazeC.position.z = -R * 0.28;
-    g.add(hazeP, hazeC);
-
-    // ── gravity well: the 2D floor grid (spokes + rings) on a funnel surface. The rings flow
-    //    inward and the centre darkens into a hole, so the depth reads even at a glance.
-    const prof: THREE.Vector2[] = [];
-    for (let i = 0; i <= 64; i++) {
-      const r = R * (0.06 + 1.9 * Math.pow(i / 64, 1.35));
-      prof.push(new THREE.Vector2(r, this.well(r)));
-    }
-    const funnelGeo = new THREE.LatheGeometry(prof, 128);
-    this.funnelMat = new THREE.ShaderMaterial({
-      vertexShader: FUNNEL_VS, fragmentShader: FUNNEL_FS,
-      uniforms: {
-        uR: { value: R }, uTime: { value: 0 }, uOpacity: { value: 1 }, uHeat: { value: 0 },
-        uLine: { value: disp(CYAN) }, uHole: { value: disp('#220c4c') }, uPink: { value: disp(PINK) },
-      },
-      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    // the disc
+    const disc = new THREE.ShaderMaterial({
+      vertexShader: LOCAL_VS, fragmentShader: DISC_FS, transparent: true, depthWrite: false,
+      uniforms: { uR: { value: Rb }, uTime: { value: 0 }, uOpacity: { value: 1 }, uHeat: { value: 0 } },
     });
-    const funnel = new THREE.Mesh(funnelGeo, this.funnelMat);
-    funnel.rotation.x = Math.PI / 2;           // lathe axis (y) -> well depth (z)
-    funnel.renderOrder = -2;
-    this.wellG.add(funnel);
+    this.shaders.push(disc);
+    const discM = new THREE.Mesh(new THREE.CircleGeometry(Rb, 128), disc);
+    discM.renderOrder = -1;
+    b.add(discM);
 
-    // ── rings: outer stays facing you (it is the drop target), the inner two swing ──
-    const ring = (radius: number, tube: number, core: string, glow: string, parent: THREE.Object3D, wide: number, tight: number) => {
-      const torus = new THREE.Mesh(new THREE.TorusGeometry(radius, tube, 10, 180), this.track(basic(core, 0, false), 1, 0));
-      const plane = new THREE.PlaneGeometry(1, 1);
-      const gw = new THREE.Mesh(plane, this.track(basic(glow, 0, true, this.glowWide), wide * 0.25, wide * 0.5));
-      const gt = new THREE.Mesh(plane, this.track(basic(glow, 0, true, this.glowTight), tight * 0.6, tight * 0.7));
-      gw.scale.setScalar(radius * 2 / 0.8); gt.scale.setScalar(radius * 2 / 0.8);
-      parent.add(gw, gt, torus);
+    // the neon ring (outer tube + glow + inner thin ring + plasma arcs), one shader
+    const ring = new THREE.ShaderMaterial({
+      vertexShader: LOCAL_VS, fragmentShader: RING_FS, transparent: true, depthWrite: false, premultipliedAlpha: true,
+      uniforms: { uR: { value: Rb }, uRi: { value: Rb * INNER }, uTime: { value: 0 }, uOpacity: { value: 1 }, uHeat: { value: 0 } },
+    });
+    this.shaders.push(ring);
+    const ringM = new THREE.Mesh(new THREE.RingGeometry(Rb * (INNER - 0.12), Rb * 1.5, 256, 1), ring);
+    ringM.position.z = 2;
+    b.add(ringM);
+
+    // "Gravity / Zone"
+    const px = Math.round(Rb * 0.5) * 2;
+    const make = () => {
+      const { tex, w, h, textW } = badgeTextTexture(px);
+      const scale = (Rb * 1.4) / textW;                          // "Gravity" spans ~1.4 x the ring radius (intro)
+      return { tex, w: w * scale, h: h * scale };
     };
-    const outer = new THREE.Group();
-    ring(R, 2.1, '#ff8fcf', PINK, outer, 0.85, 1.0);
-    ring(R * 0.76, 1.5, '#9ff4ff', CYAN, this.midRing, 0.6, 0.6);
-    ring(R * 0.52, 1.5, '#ff9fd6', PINK, this.innerRing, 0.5, 0.55);
-    g.add(outer, this.midRing, this.innerRing);
-
-    // far cyan halo rings
-    for (const [dr, a] of [[26, 0.3], [52, 0.15], [85, 0.07]] as const) {
-      const t = new THREE.Mesh(new THREE.TorusGeometry(R + dr, 1.1, 6, 160), this.track(basic(CYAN, 0, true), a, 0));
-      g.add(t);
-    }
-
-    // ── spinning tick ring + neon dots (as drawSpinRing) ────────────────────
-    const tickGeo = new THREE.BoxGeometry(1, 1, 1.5);
-    const ticks = new THREE.InstancedMesh(tickGeo, this.track(new THREE.MeshBasicMaterial({
-      transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
-    }), 1, 0), 24);
-    const m4 = new THREE.Matrix4(); const q = new THREE.Quaternion(); const v = new THREE.Vector3(); const s = new THREE.Vector3();
-    for (let i = 0; i < 24; i++) {
-      const deg = i * 15;
-      const major = deg % 45 === 0;
-      const a = THREE.MathUtils.degToRad(deg);
-      const r0 = R + 8, r1 = R + (major ? 32 : 20);
-      const mid = (r0 + r1) / 2;
-      q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), a);
-      m4.compose(v.set(Math.cos(a) * mid, Math.sin(a) * mid, 0), q, s.set(r1 - r0, major ? 3.5 : 1.6, 1));
-      ticks.setMatrixAt(i, m4);
-      ticks.setColorAt(i, new THREE.Color(major ? MAGENTA : CYAN).multiplyScalar(major ? 1 : 0.6));
-    }
-    this.spin.add(ticks);
-    const dots = new GlowPoints(24, this.dot);
-    for (let i = 0; i < 12; i++) {
-      const a = THREE.MathUtils.degToRad(i * 30);
-      const c = disp(i % 2 === 0 ? MAGENTA : CYAN);
-      dots.set(i * 2, Math.cos(a) * (R + 48), Math.sin(a) * (R + 48), 0, c, 26, 0.55);
-      dots.set(i * 2 + 1, Math.cos(a) * (R + 48), Math.sin(a) * (R + 48), 0.5, c.clone().lerp(new THREE.Color(1, 1, 1), 0.35), 10, 1);
-    }
-    dots.flush();
-    this.track(dots.mat as unknown as THREE.Material & { opacity: number }, 1, 0);
-    this.spin.add(dots.points);
-    g.add(this.spin);
-
-    // ── comets racing round the main ring ───────────────────────────────────
-    this.comets = new GlowPoints(3 * 9, this.dot);
-    g.add(this.comets.points);
-
-    // ── vortex: particles spiralling down the well ──────────────────────────
-    const N = this.quality === 'high' ? 240 : this.quality === 'mid' ? 150 : 80;
-    this.vortex = new GlowPoints(N, this.dot);
-    this.vortexSeed = [];
-    const palette = [disp(PINK), disp(CYAN), disp('#ffffff'), disp(MAGENTA)];
-    for (let i = 0; i < N; i++) {
-      this.vortexSeed.push({
-        th: Math.random() * Math.PI * 2, sp: 0.1 + Math.random() * 0.12, ph: Math.random(),
-        c: palette[i % palette.length], s: 5 + Math.random() * 7,
-      });
-    }
-    this.wellG.add(this.vortex.points);
-    // lay the well back like a floor under the portal: head-on a funnel looks like a flat target
-    this.wellG.rotation.x = -0.95;
-    this.wellG.position.set(0, -R * 0.08, -R * 0.1);
-    g.add(this.wellG);
-
-    // ── GRAVITY / ZONE neon text (white core, coloured glow) ────────────────
-    const fs = Math.round(R * 0.52);
-    const addText = (label: string, glow: string, y: number) => {
-      const { tex, w, h } = neonTextTexture(label, glow, fs * 2);
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(w / 2, h / 2), this.track(new THREE.MeshBasicMaterial({
-        map: tex, transparent: true, opacity: 0, depthWrite: false, toneMapped: false,
-      }), 1, 0));
-      m.position.set(0, y, 8);
-      m.userData.label = label; m.userData.glow = glow;
-      g.add(m);
-      this.texts.push(m);
-    };
-    addText('GRAVITY', CYAN, Math.round(fs * 0.55));
-    addText('ZONE', PINK, -Math.round(fs * 0.5));
-    // the canvas text needs Baloo 2; redraw once the font is surely there
-    document.fonts?.load(`800 ${fs * 2}px "Baloo 2"`).then(() => {
-      for (const m of this.texts) {
-        const { tex } = neonTextTexture(m.userData.label, m.userData.glow, fs * 2);
-        const mat = m.material as THREE.MeshBasicMaterial;
-        mat.map?.dispose(); mat.map = tex; mat.needsUpdate = true;
-      }
+    const t0 = make();
+    this.text = new THREE.Mesh(new THREE.PlaneGeometry(t0.w, t0.h), this.track(new THREE.MeshBasicMaterial({
+      map: t0.tex, transparent: true, opacity: 0, depthWrite: false, toneMapped: false,
+    }), 1, 0));
+    this.text.position.set(0, Rb * 0.03, 4);
+    b.add(this.text);
+    document.fonts?.load(`800 ${px}px "Baloo 2"`).then(() => {
+      if (!this.text) return;
+      const mat = this.text.material as THREE.MeshBasicMaterial;
+      mat.map?.dispose(); mat.map = make().tex; mat.needsUpdate = true;
     }).catch(() => {});
+
+    // twinkles riding the ring
+    const NT = this.quality === 'low' ? 14 : 26;
+    this.twinkles = new GlowPoints(NT, this.dot);
+    this.twSeed = [];
+    const tw = [disp('#ffffff'), disp('#ffc6f1'), disp(PINK), disp('#d7b8ff')];
+    for (let i = 0; i < NT; i++) {
+      this.twSeed.push({ th: Math.random() * Math.PI * 2, r: Rb * (0.98 + Math.random() * 0.3), ph: Math.random(), sp: 0.5 + Math.random() * 1.1, c: tw[i % tw.length], s: 4 + Math.random() * 6 });
+    }
+    b.add(this.twinkles.points);
+
+    // sparkles rising from the painted floor rings
+    const NS = this.quality === 'high' ? 70 : this.quality === 'mid' ? 46 : 24;
+    this.sparks = new GlowPoints(NS, this.dot);
+    this.spSeed = [];
+    const sc = [disp(PINK), disp(CYAN), disp('#fff3a6'), disp('#b6ff9e'), disp('#ffffff')];
+    for (let i = 0; i < NS; i++) {
+      this.spSeed.push({ u: Math.random() * Math.PI * 2, ph: Math.random(), sp: 0.28 + Math.random() * 0.35, rise: 0.45 + Math.random() * 0.75, c: sc[i % sc.length], s: 4 + Math.random() * 7 });
+    }
+    this.group.add(this.sparks.points);
     this.built = true;
   }
 
   update(t: number, dt: number, alpha: number, pxPerUnit: number) {
     if (!this.built) return;
-    const R = this.R;
-    let sc = 1;
+    const R = this.R, Rb = R * BADGE;
+    // rise up out of the floor: small and low -> overshoot -> hover
+    let rise = 1;
     if (this.reformT0 >= 0) {
-      const p = (this.clock() - this.reformT0) / 0.65;
+      const p = (this.clock() - this.reformT0) / 0.75;
       if (p >= 1) this.reformT0 = -1;
-      else {
-        const c1 = 1.70158, c3 = c1 + 1, x = p - 1;
-        sc = 0.25 + 0.75 * (1 + c3 * x * x * x + c1 * x * x);   // easeOutBack
-      }
+      else rise = Math.max(0, p);
     }
-    this.group.scale.setScalar(sc);
+    const c1 = 1.70158, c3 = c1 + 1, x = rise - 1;
+    const e = rise >= 1 ? 1 : 1 + c3 * x * x * x + c1 * x * x;          // easeOutBack
+    const bob = Math.sin(t * 1.6) * Rb * 0.025;
+    this.badge.position.set(this.floor.x * (1 - e), this.floor.y * (1 - e) + bob * e, 0);
+    this.badge.scale.setScalar(0.18 + 0.82 * e);
+    const appear = Math.min(1, rise * 2.2);
     const pulse = 0.5 + 0.5 * Math.sin(t * 2.2);
-    const shimmer = 0.85 + 0.15 * Math.sin(t * 9.0);
-    const heat = pulse * shimmer;
+    const heat = pulse * (0.85 + 0.15 * Math.sin(t * 9.0));
     this.flare = Math.max(0, this.flare - dt * 1.6);
-    const boost = 1 + this.flare * 1.2;
-    for (const e of this.mats) {
-      e.m.opacity = Math.min(1, (e.base + e.heat * (0.35 + heat * 0.95)) * alpha * boost);
+    const boost = 1 + this.flare * 1.1;
+    const vis = Math.min(1, alpha / 0.78);                       // GameScene breathes its zone 0.78..1: stay steady
+    const a = vis * vis * (3 - 2 * vis) * appear;
+    for (const m of this.mats) m.m.opacity = Math.min(1, (m.base + m.heat * (0.35 + heat * 0.95)) * a * boost);
+    for (const s of this.shaders) {
+      s.uniforms.uTime.value = t;
+      s.uniforms.uHeat.value = heat + this.flare;
+      s.uniforms.uOpacity.value = Math.min(1, a * boost);
     }
-    // gyro swing of the inner rings; tick ring turns like the 2D one (0.012 rad/frame)
-    this.midRing.rotation.set(0, Math.sin(t * 0.8) * 0.55, 0);
-    this.innerRing.rotation.set(Math.sin(t * 0.9 + 1) * 0.6, 0, 0);
-    this.spin.rotation.z = -t * 0.72;
-    if (this.funnelMat) {
-      this.funnelMat.uniforms.uTime.value = t;
-      this.funnelMat.uniforms.uHeat.value = heat;
-      this.funnelMat.uniforms.uOpacity.value = Math.min(1, alpha * boost);
-    }
-    const cs = 1 + pulse * 0.022;
-    for (const m of this.texts) m.scale.setScalar(cs);
-
-    const white = new THREE.Color(1, 1, 1);
-    if (this.comets) {
-      for (let i = 0; i < 3; i++) {
-        const ang = t * 1.7 + (i * Math.PI * 2) / 3;
-        const c = disp(i % 2 === 0 ? CYAN : PINK);
-        for (let tr = 0; tr < 6; tr++) {
-          const ta = ang - (tr + 1) * 0.1;
-          const f = 1 - (tr + 1) / 7;
-          this.comets.set(i * 9 + tr, Math.cos(ta) * R, -Math.sin(ta) * R, 1, c, 14 * f, 0.55 * f);
-        }
-        this.comets.set(i * 9 + 6, Math.cos(ang) * R, -Math.sin(ang) * R, 1.5, c, 40, 0.5);
-        this.comets.set(i * 9 + 7, Math.cos(ang) * R, -Math.sin(ang) * R, 2, c, 18, 0.9);
-        this.comets.set(i * 9 + 8, Math.cos(ang) * R, -Math.sin(ang) * R, 2.5, white, 8, 1);
-      }
-      this.comets.flush();
-      this.comets.mat.uniforms.uPx.value = pxPerUnit;
-      this.comets.mat.uniforms.uOpacity.value = Math.min(1, alpha * boost);
-    }
-    if (this.vortex) {
-      this.vortexSeed.forEach((p, i) => {
-        const life = (t * p.sp + p.ph) % 1;
-        const r = R * (1.9 - 1.78 * Math.pow(life, 0.8));
-        const th = p.th + life * Math.PI * 2.4 + t * 0.25;
-        const a = Math.min(1, life / 0.18) * (1 - Math.max(0, (life - 0.82) / 0.18)) * 0.85;
-        this.vortex!.set(i, Math.cos(th) * r, Math.sin(th) * r, this.well(r) + 3, p.c, p.s * (1.15 - 0.55 * life), a);
+    if (this.text) this.text.scale.setScalar(1 + pulse * 0.015);
+    if (this.twinkles) {
+      this.twSeed.forEach((p, i) => {
+        const k = (t * p.sp + p.ph) % 1, tw = Math.pow(Math.sin(k * Math.PI), 3);
+        const th = p.th + t * 0.35;
+        this.twinkles!.set(i, Math.cos(th) * p.r, Math.sin(th) * p.r, 6, p.c, p.s * (0.5 + 0.7 * tw), tw);
       });
-      this.vortex.flush();
-      this.vortex.mat.uniforms.uPx.value = pxPerUnit;
-      this.vortex.mat.uniforms.uOpacity.value = Math.min(1, alpha * (0.75 + heat * 0.25) * boost);
+      this.twinkles.flush();
+      this.twinkles.mat.uniforms.uPx.value = pxPerUnit;
+      this.twinkles.mat.uniforms.uOpacity.value = Math.min(1, a * boost);
     }
-    for (const e of this.mats) {
-      const sm = e.m as unknown as THREE.ShaderMaterial;
-      if (sm.uniforms?.uPx) sm.uniforms.uPx.value = pxPerUnit;
-      if (sm.uniforms?.uOpacity) sm.uniforms.uOpacity.value = e.m.opacity;
+    if (this.sparks) {
+      const F = this.floor, fr = this.floorR;
+      const burst = this.reformT0 >= 0 ? 1.8 : 1;
+      this.spSeed.forEach((p, i) => {
+        const life = (t * p.sp * burst + p.ph) % 1;
+        const ang = p.u + Math.sin(t * 0.3 + i) * 0.05;
+        const x0 = F.x + Math.cos(ang) * fr.x * (0.75 + 0.3 * Math.sin(i * 1.7));
+        const y0 = F.y + Math.sin(ang) * fr.y;
+        const y = y0 + life * Rb * p.rise;
+        const fade = Math.min(1, life / 0.15) * (1 - Math.max(0, (life - 0.6) / 0.4));
+        this.sparks!.set(i, x0 + Math.sin(life * 6 + i) * 3, y, 4, p.c, p.s * (1 - 0.4 * life), fade * 0.9);
+      });
+      this.sparks.flush();
+      this.sparks.mat.uniforms.uPx.value = pxPerUnit;
+      this.sparks.mat.uniforms.uOpacity.value = Math.min(1, vis * boost);
     }
   }
 }

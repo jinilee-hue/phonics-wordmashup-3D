@@ -12,7 +12,7 @@ from playwright.async_api import async_playwright
 URL = sys.argv[1] if len(sys.argv) > 1 else 'http://127.0.0.1:5183/?q=high'
 MP4 = sys.argv[2] if len(sys.argv) > 2 else os.path.join(OUT, 'travel.mp4')
 FPS = 30
-END = 1.05 + 1.25 + 0.95         # DEPART + ARRIVE + Glee's twirl and landing
+END = 1.05 + 1.4 + 1.0 + 0.95    # DEPART + the arrival footage + Glee's run home + her twirl and landing
 FRAMES = os.path.join(OUT, 'travel_frames')
 
 STATE = '''() => { const s = window.WM3D, sc = s && s.scene; if (!sc) return null;
@@ -69,6 +69,11 @@ async def main():
         for f in range(n + 1):
             # Glee's own clock (blinks, the twirl after the run) steps with the frozen travel clock
             await pg.evaluate(f'() => {{ const W = window.WM3D; W.travel.freezeAt = {f / FPS:.4f}; if (W.glee) W.glee.freezeAt = {g0 + f / FPS:.4f}; }}')
+            # the arrival footage seeks to the frozen time: wait for its frame
+            for _ in range(60):
+                if await pg.evaluate('() => window.WM3D.travel.clipReady'):
+                    break
+                await pg.wait_for_timeout(25)
             await pg.evaluate(TWO_FRAMES)
             await pg.screenshot(path=os.path.join(FRAMES, f'f_{f:03d}.png'))
         await pg.evaluate('() => { const W = window.WM3D; W.travel.freezeAt = null; if (W.glee) W.glee.freezeAt = null; }')

@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { cpSync, createReadStream, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { cpSync, createReadStream, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 
 const MIME: Record<string, string> = {
@@ -28,8 +28,22 @@ function copyAssetsPlugin() {
       });
       server.middlewares.use('/videos', (req, res, next) => {
         if (req.url === '/intro.mp4' && existsSync(videoSrc)) {
+          // byte ranges, like a real static host: the 3D travel seeks inside the intro
+          const size = statSync(videoSrc).size;
           res.setHeader('Content-Type', 'video/mp4');
-          createReadStream(videoSrc).pipe(res as unknown as NodeJS.WritableStream);
+          res.setHeader('Accept-Ranges', 'bytes');
+          const m = /bytes=(\d*)-(\d*)/.exec(String(req.headers?.range ?? ''));
+          if (m && (m[1] || m[2])) {
+            const start = m[1] ? parseInt(m[1], 10) : Math.max(0, size - parseInt(m[2], 10));
+            const end = m[1] && m[2] ? Math.min(size - 1, parseInt(m[2], 10)) : size - 1;
+            res.statusCode = 206;
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+            res.setHeader('Content-Length', String(end - start + 1));
+            createReadStream(videoSrc, { start, end }).pipe(res as unknown as NodeJS.WritableStream);
+          } else {
+            res.setHeader('Content-Length', String(size));
+            createReadStream(videoSrc).pipe(res as unknown as NodeJS.WritableStream);
+          }
         } else { next(); }
       });
     },

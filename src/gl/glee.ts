@@ -8,7 +8,7 @@
 // flights between rounds never move it - it travels with the player.
 import * as THREE from 'three';
 import type { Quality, Stage } from './stage';
-import { DEPART } from './travel';
+import { ARRIVE_AT, DEPART } from './travel';
 
 export type GleeEvent = 'hello' | 'grab' | 'snap' | 'wrong' | 'match' | 'cheer' | 'hint' | 'finale';
 type Pt = { x: number; y: number };
@@ -22,12 +22,13 @@ const FOOT_L = new THREE.Vector3(-0.122, 0.08, 0.035), FOOT_R = new THREE.Vector
 const TUCK_L = new THREE.Vector3(-0.11, 0.15, 0.0), TUCK_R = new THREE.Vector3(0.11, 0.15, 0.0);
 // Between rounds Glee runs to the gate and comes back with the next cards (driven by the travel clock):
 // DEPART: turn to the gate, dash along the pink path to the zone, leap into the portal (fades in the flash)
-// ARRIVE: drop out of the portal, run back home facing the player; then a 360-degree twirl and a landing.
+// ARRIVE: hidden while the arrival footage plays; once the world is at rest (ARRIVE_AT) and the zone has risen,
+// drop out of the portal, run back home facing the player; then a 360-degree twirl and a landing.
 const RUN_FREQ = 3.3;                     // leg cycles per second (two steps each)
 const YAW_IN = Math.PI - 0.5;             // back to the viewer, toward the portal
 const YAW_OUT = -0.5;                     // toward the viewer and home
 const S_FLOOR = 0.55, S_PORTAL = 0.3;     // perspective scale at the zone's foot / inside the portal
-const RUN_END = DEPART + 1.0;             // then the twirl act takes over (it outlives the travel)
+const RUN_END = ARRIVE_AT + 1.0;             // then the twirl act takes over (it outlives the travel)
 const PUFF_LIFE = 0.5;
 const GLITTER: Record<Quality, number> = { high: 140, mid: 96, low: 56 };
 
@@ -373,37 +374,46 @@ const puffTex = () => canvasTex((g, s) => {
   gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.4, 'rgba(246,238,255,.85)'); gr.addColorStop(0.75, 'rgba(196,170,255,.45)'); gr.addColorStop(1, 'rgba(170,140,255,0)');
   g.fillStyle = gr; g.fillRect(0, 0, s, s);
 }, 64);
-/** listening: a white badge with a pink ear and sound waves coming in from the left */
+/** listening: a pink ear with sound waves coming in from the left - no badge behind it, the scene shows
+ *  through (user: "귀 나오는 배경 투명하게"). A thin white rim and a soft shadow keep it readable on the backdrop. */
 const earTex = () => canvasTex((g, s) => {
-  const R = s * 0.42;
-  g.save();
-  g.shadowColor = 'rgba(80,20,60,.35)'; g.shadowBlur = s * 0.05; g.shadowOffsetY = s * 0.02;
-  g.beginPath(); g.arc(s / 2, s / 2, R, 0, Math.PI * 2); g.fillStyle = '#ffffff'; g.fill();
-  g.restore();
-  g.beginPath(); g.arc(s / 2, s / 2, R - s * 0.012, 0, Math.PI * 2); g.lineWidth = s * 0.024; g.strokeStyle = '#ffc2dc'; g.stroke();
-  const cx = s * 0.58, cy = s * 0.5, r = s * 0.2;
+  const cx = s * 0.6, cy = s * 0.5, r = s * 0.24;                   // the ear itself is the icon now: a bit bigger
+  const line = s * 0.036, rim = s * 0.05;
   g.lineJoin = 'round'; g.lineCap = 'round';
-  g.beginPath();
-  g.moveTo(cx - r * 0.1, cy + r * 1.05);
-  g.bezierCurveTo(cx - r * 0.95, cy + r * 0.95, cx - r * 0.85, cy - r * 1.15, cx + r * 0.1, cy - r * 1.1);
-  g.bezierCurveTo(cx + r * 1.05, cy - r * 1.05, cx + r * 1.05, cy - r * 0.05, cx + r * 0.55, cy + r * 0.38);
-  g.bezierCurveTo(cx + r * 0.28, cy + r * 0.62, cx + r * 0.45, cy + r * 1.08, cx - r * 0.1, cy + r * 1.05);
-  g.closePath();
+  const ear = () => {
+    g.beginPath();
+    g.moveTo(cx - r * 0.1, cy + r * 1.05);
+    g.bezierCurveTo(cx - r * 0.95, cy + r * 0.95, cx - r * 0.85, cy - r * 1.15, cx + r * 0.1, cy - r * 1.1);
+    g.bezierCurveTo(cx + r * 1.05, cy - r * 1.05, cx + r * 1.05, cy - r * 0.05, cx + r * 0.55, cy + r * 0.38);
+    g.bezierCurveTo(cx + r * 0.28, cy + r * 0.62, cx + r * 0.45, cy + r * 1.08, cx - r * 0.1, cy + r * 1.05);
+    g.closePath();
+  };
+  const wave = (i: number) => {
+    g.beginPath();
+    g.arc(cx - r * 0.3, cy, r * (1.35 + i * 0.5), Math.PI * 0.8, Math.PI * 1.2);
+  };
+  // white rim (sticker edge) with a soft shadow, under the ear and the waves only
+  g.save();
+  g.shadowColor = 'rgba(60,10,50,.45)'; g.shadowBlur = s * 0.04; g.shadowOffsetY = s * 0.015;
+  g.strokeStyle = g.fillStyle = '#ffffff';
+  ear(); g.fill(); g.lineWidth = line + rim; g.stroke();
+  for (let i = 0; i < 2; i++) { wave(i); g.lineWidth = line + rim; g.stroke(); }
+  g.restore();
+  ear();
   g.fillStyle = '#ffc6de'; g.fill();
-  g.lineWidth = s * 0.042; g.strokeStyle = '#f2479a'; g.stroke();
+  g.lineWidth = line * 1.1; g.strokeStyle = '#f2479a'; g.stroke();
   g.beginPath();                                                     // inner curl
   g.moveTo(cx - r * 0.25, cy + r * 0.25);
   g.bezierCurveTo(cx - r * 0.45, cy - r * 0.55, cx + r * 0.55, cy - r * 0.7, cx + r * 0.42, cy - r * 0.05);
   g.bezierCurveTo(cx + r * 0.35, cy + r * 0.25, cx + r * 0.05, cy + r * 0.2, cx + r * 0.05, cy + r * 0.45);
-  g.lineWidth = s * 0.034; g.stroke();
+  g.lineWidth = line * 0.9; g.stroke();
   for (let i = 0; i < 2; i++) {                                      // sound waves
-    g.globalAlpha = 1 - i * 0.3;
-    g.beginPath();
-    g.arc(cx - r * 0.3, cy, r * (1.35 + i * 0.5), Math.PI * 0.8, Math.PI * 1.2);
-    g.lineWidth = s * 0.04; g.strokeStyle = '#f2479a'; g.stroke();
+    g.globalAlpha = 1 - i * 0.25;
+    wave(i);
+    g.lineWidth = line; g.strokeStyle = '#f2479a'; g.stroke();
   }
   g.globalAlpha = 1;
-}, 128);
+}, 192);
 const shadowTex = () => canvasTex((g, s) => {
   const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
   gr.addColorStop(0, 'rgba(18,6,40,1)'); gr.addColorStop(0.55, 'rgba(18,6,40,.5)'); gr.addColorStop(1, 'rgba(18,6,40,0)');
@@ -604,6 +614,13 @@ export class Glee {
   private toScreen(v: THREE.Vector3): Pt {
     const w = this.root.localToWorld(v.clone());
     return { x: w.x + this.stage.W / 2, y: this.stage.H / 2 - w.y };
+  }
+
+  /** Glee's box on screen (game px) at home, or null when she is not shown */
+  screenBox() {
+    if (!this.visible) return null;
+    const P = this.override ?? this.home, h = P.h;
+    return { l: P.x - 0.5 * h, r: P.x + 0.5 * h, t: P.y - 1.22 * h, b: P.y + 0.08 * h };
   }
 
   /** Is game px (x, y) on Glee (at home, not running)? */
@@ -856,7 +873,7 @@ export class Glee {
       F.shadow.x = F.gx; F.shadow.y = F.gy; F.shadow.scale = l > 0 ? S_FLOOR : F.scale; F.shadow.a = 1 - lin(0, 0.6, l);
       face.lookX = 0;
     } else {
-      const a = u - DEPART;
+      const a = u - ARRIVE_AT;
       const p = lin(0.06, 0.36, a);                          // 1) drop out of the portal to the floor
       const q = 1 - Math.pow(1 - lin(0.33, 1.0, a), 2.2);    // 2) run home, slowing down at the end
       const ph = 2 * Math.PI * RUN_FREQ * Math.max(0, a - 0.33);
@@ -906,7 +923,7 @@ export class Glee {
     let n = 0;
     if (u !== null) {
       const h = this.home.h;
-      const legs: [number, number, number][] = [[0.1, 0.2, 0.74], [DEPART + 0.33, DEPART + 0.42, DEPART + 0.9]];
+      const legs: [number, number, number][] = [[0.1, 0.2, 0.74], [ARRIVE_AT + 0.33, ARRIVE_AT + 0.42, ARRIVE_AT + 0.9]];
       for (const [start, from, to] of legs) {
         for (let k = 0; k < 14 && n < this.puffs.length; k++) {
           const uk = start + (0.5 + k) / (2 * RUN_FREQ);     // a foot lands at phase pi/2 + k*pi
