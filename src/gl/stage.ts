@@ -72,7 +72,7 @@ export class Stage {
     // (r155+ lights: intensity pi == 1.0 irradiance).
     this.hemi = new THREE.HemisphereLight(0xffffff, 0xe6e3ee, Math.PI * 0.48);
     this.scene.add(this.hemi);
-    this.key = new THREE.DirectionalLight(0xfffcf8, Math.PI * 0.46);
+    this.key = new THREE.DirectionalLight(0xfffcf8, Math.PI * 0.46 * 1.25);   // x1.25: centred (below), the left cards keep their level
     this.scene.add(this.key, this.key.target);
   }
 
@@ -231,8 +231,10 @@ if (uClipMix > 0.0) {
       this.bgW = w * BG_MARGIN; this.bgH = h * BG_MARGIN;
       this.buildRelief();
     }
-    // key light from the upper right, in front (the card art is lit that way)
-    this.key.position.set(W * 0.45, H * 0.9, 1500);
+    // key light from the top centre, in front. Left cards turn right and right cards turn left (mirrored yaw), so a
+    // key off to the upper right (x = 0.45 W, as first set) lit the right row ~10% darker (grey-face test: 187 vs
+    // 169; user: "우측에 카드들이 왼쪽에 있는 카드들보다 어두운건 왜"). Centred: 188 vs 187.
+    this.key.position.set(0, H * 0.9, 1500);
     this.key.target.position.set(0, 0, SHADOW_Z);
   }
 
