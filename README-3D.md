@@ -32,7 +32,8 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
   - `src/gl/tutor.ts` — 글리가 말로 게임을 이끈다(말풍선·글자 없이 음성만, 정해진 영어 문장 + 브라우저 음성 인식. 조직 정책상 LLM 대화는 쓰지 않음). 한 번에 한 명만 말하고, 아이가 움직이면 글리가 말을 멈춘다. 듣는 동안은 머리 옆에 민트 귀 아이콘만 보인다(뒤에 배지 없이 배경이 비침, 몸의 민트와 같은 계열).
     - 라운드: "Which two go together?" → 듣기 → 카드 단어를 말하면 그 카드를 넣고 "What goes with pan?" → 맞으면 "Pan and cake make... pancake!" → "Say it with me!" → 못 알아들으면 "Listen! Pan! Cake! Pancake! Your turn!" → 칭찬 → 다음 판.
     - 오답(글자 토스트 대신 음성): 두 카드를 읽고 "That's not a word!" → 한 장이 맞았으면 "Pan is right!" 하며 그 카드를 다시 넣고 짝을 묻는다. 둘 다 틀리면 1번째 "Let's try again!", 2번째 첫 카드를 보여 주고 넣은 뒤 짝을 묻는다, 3번째 힌트. 원래 Mic 버튼의 한국어 안내도 글리 목소리로 바뀐다.
-    - 음성: `tools/build_glee_voice.py`(edge-tts `en-US-AnaNeural`, 시제품용) → `public/gl/voice/*.mp3`, `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다.
+    - 음성: `tools/build_glee_voice.py`(edge-tts `en-US-JennyNeural` +15Hz −5%, 시제품용) → `public/gl/voice/*.mp3`, `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다.
+      처음 쓴 `en-US-AnaNeural`(+10Hz)은 카드 단어 한마디("Snow!", "Shell!", "Sunset!")가 중국어처럼 들렸다(사용자: "영어로만 얘기해"). Whisper 언어 판별로 한 단어 80개 중 Ana는 65개만 영어(중국어 4, 일본어 9), Jenny는 80개 모두 영어였다.
 - 배경 깊이: `tools/build_depth.py`가 배경 그림의 깊이 지도(Depth Anything V2 Small, 로컬 CPU)를 만들어 `public/gl/bg_depth.png`에 저장 → 배경이 입체 부조가 되어 카메라가 움직이면 시차가 생긴다(정지 화면은 원본과 똑같다).
   - 실행: `uv run --with torch --with transformers --with pillow --with numpy python tools/build_depth.py`
 - 인트로 영상(`Word Mashup/Word Mashup.mp4`): 오른쪽 아래 Gemini(Veo) 반짝이 마크를 지운 판. 마크가 반투명하게 섞인 식을 거꾸로 풀어 원래 화면을 되살렸다(지우개로 칠한 것이 아님). 마크 모양은 GeminiWatermarkTool(MIT, allenk)의 보정 마스크에서 시작해, 이 영상의 평평한 장면에서 잰 값으로 고쳤다(영상 마크는 가운데가 테두리보다 15% 옅다). 안쪽 세기는 프레임마다 둘레 밝기에 맞추고, 별 테두리 2~3px에 남는 약한 계단만 지운 뒤 바깥에서 다시 이어 붙였다(Poisson). 테두리에 남는 1~2px 점도 지운다. 만드는 스크립트: 세션 scratch `wm/wmk/veo_v7.py`. 마크 밖 화면과 소리는 그대로(재인코딩만). 마크가 있던 원래 영상은 git 기록(`a489ef7` 이전)과 원본 저장소에 있다.

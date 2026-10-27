@@ -1,7 +1,10 @@
 """Glee's voice: every tutor line pre-made, so all devices sound the same (no speechSynthesis).
 
-Voice: Microsoft neural 'Ana' (en-US-AnaNeural, a young girl), +10Hz, -5% - the same young voice the user
-approved for the Halli Galli bell tutor (+55Hz was "too babyish").
+Voice: Microsoft neural 'Jenny' (en-US-JennyNeural), +15Hz, -5%. It was 'Ana' (en-US-AnaNeural, a young girl,
++10Hz), the Halli Galli bell tutor's voice, but her one-word lines ('Snow!', 'Shell!', 'Sunset!' - read on every
+card pick) sounded Chinese (user: "튜터가 자꾸 니하오 중국말 하는거 같은데", "중국말 쓰면 안돼. 영어로만 얘기해").
+Whisper language ID on the 80 one-word clips: Ana 65/80 heard as English (4 Chinese, 9 Japanese; no better with
++0Hz, slower or '.'), Jenny +15Hz 80/80 English (Ava 80/80 too). One voice for every line.
 Tool: edge-tts (free, prototype only). For a release use Azure Speech (paid) or a voice actor.
 
 Output
@@ -24,7 +27,7 @@ import subprocess
 
 import numpy as np
 
-VOICE, RATE, PITCH = 'en-US-AnaNeural', '-5%', '+10Hz'
+VOICE, RATE, PITCH = 'en-US-JennyNeural', '-5%', '+15Hz'
 SR = 24000
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / 'public' / 'gl' / 'voice'
