@@ -58,6 +58,7 @@ uniform float uBlink, uHappy, uSad, uOpen, uFrown, uO, uBlush;
 uniform float uPx;        // one device pixel in body units
 uniform float uTime, uOpacity, uSteps;
 uniform float uInk;       // the dark outline: 1 = full, 0 = none (a soft jelly-coloured edge instead) - the user chose none
+uniform float uAA;        // sub-pixel rays at the silhouette (4 = rotated grid, 2 on low)
 
 float smin(float a, float b, float k) { float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25; }
 float sdEll(vec3 p, vec3 r) { float k0 = length(p / r); float k1 = length(p / (r * r)); return k0 * (k0 - 1.0) / k1; }
@@ -167,35 +168,62 @@ void mouth(vec2 f, float aa, inout vec3 col, inout float cover) {
   cover = max(cover, a);
 }
 
-void main() {
-  vec3 ro = uCam;
-  vec3 rd = normalize(vPos - uCam);
-  vec2 tb = boxHit(ro, rd);
-  float t = max(tb.x, 0.0);
-  float tEnd = tb.y;
-  float dmin = 1e9, tmin = t;
-  bool hit = false;
+// march one ray through the box: true on a hit (at tHit); also the closest approach on the way (dmin at tmin)
+bool march(vec3 ro, vec3 rd, float t, float tEnd, out float tHit, out float dmin, out float tmin) {
+  dmin = 1e9; tmin = t;
   for (int i = 0; i < 96; i++) {
     if (float(i) >= uSteps) break;
     float d = map(ro + rd * t);
     if (d < dmin) { dmin = d; tmin = t; }
-    if (d < 0.0005) { hit = true; break; }
+    if (d < 0.0005) { tHit = t; return true; }
     t += d * 0.88;
     if (t > tEnd) break;
   }
+  tHit = t;
+  return false;
+}
+
+void main() {
+  // one device pixel across the box face - taken first, while every pixel of the quad still runs this code
+  vec3 pdx = dFdx(vPos), pdy = dFdy(vPos);
+  vec3 ro = uCam;
+  vec3 rd = normalize(vPos - uCam);
+  vec2 tb = boxHit(ro, rd);
+  float tEnd = tb.y;
+  float t, dmin, tmin;
+  bool hit = march(ro, rd, max(tb.x, 0.0), tEnd, t, dmin, tmin);
   vec3 outline = mix(vec3(0.38, 0.29, 0.66), vec3(0.52, 0.15, 0.42), clamp((vPos.y - 0.2) * 1.6, 0.0, 1.0));
-  if (!hit) {
-    // outer half of the outline - or without it, a soft jelly-coloured edge - antialiased (near misses)
-    float w = uPx * mix(1.0, 1.7, uInk);
+  if (!hit && uInk > 0.5) {
+    // the outline look: its outer half on the near misses
+    float w = uPx * 1.7;
     if (dmin > w) discard;
-    vec3 rimCol = jelly((ro + rd * tmin) / uSquash) * 0.82;
-    gl_FragColor = vec4(mix(rimCol, outline, uInk), (1.0 - smoothstep(uPx * 0.5 * uInk, w, dmin)) * mix(0.8, 0.92, uInk) * uOpacity);
+    gl_FragColor = vec4(outline, (1.0 - smoothstep(uPx * 0.5, w, dmin)) * 0.92 * uOpacity);
     return;
   }
+  if (!hit && dmin > uPx * 1.25) discard;
+  if (!hit) t = tmin;            // a near miss is shaded at its closest approach, just off the surface
   vec3 p = ro + rd * t;
   vec3 n = calcNormal(p);
   vec3 q = p / uSquash;
   float ndv = clamp(dot(n, -rd), 0.0, 1.0);
+
+  // coverage at the silhouette: near misses and grazing hits average sub-pixel rays on a rotated grid, so the
+  // edge is smooth without a dark line hiding its steps (one centre ray alone gives a stair-stepped edge)
+  float cov = 1.0;
+  if (!hit || ndv < 0.45) {
+    cov = 0.0;
+    for (int k = 0; k < 4; k++) {
+      if (float(k) >= uAA) break;
+      vec2 o = k == 0 ? vec2(0.125, 0.375) : k == 1 ? vec2(-0.125, -0.375) : k == 2 ? vec2(-0.375, 0.125) : vec2(0.375, -0.125);
+      vec3 rk = normalize(vPos + pdx * o.x + pdy * o.y - uCam);
+      vec2 bk = boxHit(ro, rk);
+      float tk, dk, mk;
+      bool hk = march(ro, rk, max(max(bk.x, 0.0), t - 0.1), bk.y, tk, dk, mk);
+      cov += hk ? 1.0 : 1.0 - smoothstep(0.0, uPx * 0.5, dk);
+    }
+    cov /= uAA;
+    if (cov < 0.004) discard;
+  }
 
   // thickness of jelly along the view ray: trace back from the far side of the box to the exit
   // (the inside of an ellipsoid bound is no distance at all, so marching forward inside stalls)
@@ -267,7 +295,7 @@ void main() {
 
   float alpha = max(1.0 - exp(-th * 10.0), 0.86);
   alpha = max(alpha, max(cover, ol * 0.8));
-  gl_FragColor = vec4(col, alpha * uOpacity);
+  gl_FragColor = vec4(col, alpha * cov * uOpacity);
 }`;
 
 const GLITTER_VS = /* glsl */ `
@@ -528,6 +556,7 @@ export class Glee {
         uFrown: { value: 0 }, uO: { value: 0 }, uBlush: { value: 1 },
         uPx: { value: 0.005 }, uTime: { value: 0 }, uOpacity: { value: 1 }, uSteps: { value: STEPS.high },
         uInk: { value: 0 },                 // no outline (user: "튜터는 테두리 없음으로"): a soft 3D jelly, not a sticker
+        uAA: { value: 4 },
       },
     });
     const box = new THREE.BoxGeometry(BOX.x * 2, BOX.y1 - BOX.y0, BOX.z * 2);
@@ -564,6 +593,7 @@ export class Glee {
 
   setQuality(q: Quality) {
     this.mat.uniforms.uSteps.value = STEPS[q];
+    this.mat.uniforms.uAA.value = q === 'low' ? 2 : 4;
     this.buildGlitter(GLITTER[q]);
   }
 
