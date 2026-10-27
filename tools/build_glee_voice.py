@@ -1,10 +1,11 @@
 """Glee's voice: every tutor line pre-made, so all devices sound the same (no speechSynthesis).
 
-Voice: Microsoft neural 'Jenny' (en-US-JennyNeural), +15Hz, -5%. It was 'Ana' (en-US-AnaNeural, a young girl,
-+10Hz), the Halli Galli bell tutor's voice, but her one-word lines ('Snow!', 'Shell!', 'Sunset!' - read on every
-card pick) sounded Chinese (user: "튜터가 자꾸 니하오 중국말 하는거 같은데", "중국말 쓰면 안돼. 영어로만 얘기해").
-Whisper language ID on the 80 one-word clips: Ana 65/80 heard as English (4 Chinese, 9 Japanese; no better with
-+0Hz, slower or '.'), Jenny +15Hz 80/80 English (Ava 80/80 too). One voice for every line.
+Voice: Microsoft neural 'Ana' (en-US-AnaNeural, a young girl), +10Hz, -5% - the same young voice the user
+approved for the Halli Galli bell tutor (+55Hz was "too babyish").
+Tried and reverted: 'Jenny' (en-US-JennyNeural +15Hz) after "튜터가 자꾸 니하오 중국말 하는거 같은데" - Whisper
+language ID on the 80 one-word clips: Ana 65/80 English (4 Chinese, 9 Japanese; no better with +0Hz, slower or '.'),
+Jenny 80/80 - but the user prefers Ana's voice ("목소리는 Ana가 나아", "목소리부터 다시 바꿔. Ana로"). Let the user
+hear a voice before switching to it. One voice for every line.
 Tool: edge-tts (free, prototype only). For a release use Azure Speech (paid) or a voice actor.
 
 Output
@@ -27,7 +28,7 @@ import subprocess
 
 import numpy as np
 
-VOICE, RATE, PITCH = 'en-US-JennyNeural', '-5%', '+15Hz'
+VOICE, RATE, PITCH = 'en-US-AnaNeural', '-5%', '+10Hz'
 SR = 24000
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / 'public' / 'gl' / 'voice'
@@ -96,16 +97,19 @@ for a, b, c in pairs:
     LINES[f'r_{c}'] = f'{cap(c)}!'
     LINES[f'hint_{c}'] = f'Look! {cap(say(a))}... and {say(b)}!'
 
-# Spoken differently from the written line, for clarity only (the line's text stays as written). With the plain
-# text Whisper (medium) heard 'Cellball', 'Self Lake', 'smell and ball make, smell ball', 'I am ball make' and
-# 'Melt is right'; with these, the intended words. A phonics tutor has to say the word unmistakably.
-SPOKEN = {
-    'r_snowball': 'Snow-ball!',
-    'r_snowflake': 'Snow-flake!',
-    'mk_snowball': 'Snow... and ball make... snow-ball!',
-    'mk_eyeball': 'Eye, and ball, make... eyeball!',
-    'ok_note': 'Note, is right!',
+# Spoken differently from the written line, for clarity only (the line's text stays as written), per voice: what
+# one voice garbles another says fine. Jenny: with the plain text Whisper (medium) heard 'Cellball', 'Self Lake',
+# 'smell and ball make, smell ball', 'I am ball make' and 'Melt is right'; with these, the intended words.
+SPOKEN_BY_VOICE = {
+    'en-US-JennyNeural': {
+        'r_snowball': 'Snow-ball!',
+        'r_snowflake': 'Snow-flake!',
+        'mk_snowball': 'Snow... and ball make... snow-ball!',
+        'mk_eyeball': 'Eye, and ball, make... eyeball!',
+        'ok_note': 'Note, is right!',
+    },
 }
+SPOKEN = SPOKEN_BY_VOICE.get(VOICE, {})
 assert set(SPOKEN) <= set(LINES), set(SPOKEN) - set(LINES)
 spoken = lambda i, t: SPOKEN.get(i, t)
 
