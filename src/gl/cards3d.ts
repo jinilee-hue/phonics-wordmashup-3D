@@ -17,12 +17,13 @@ const D2R = Math.PI / 180;
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 /** In-plane tilt of a 3D card. The 2D layout tilts the BOTTOM slots off the pattern of the others (left -12 deg vs
- *  -8 / -4, right +8 vs +10 / +4: GameScene leftAngle/rightAngle), which read as a different angle in 3D (user:
- *  "좌우 맨 아래 카드만 다른 카드들과 각도가 다른거 같은데" -> "맞춰줘"). In 3D they take their column's top-slot
- *  angle; the 2D game and picking (distance-based) are unchanged. Slot angles are set once and never tweened. */
+ *  -8 / -4; the right column mirrors the left: +12 vs +8 / +4 - GameScene leftAngle/rightAngle), which read as a
+ *  different angle in 3D (user: "좌우 맨 아래 카드만 다른 카드들과 각도가 다른거 같은데" -> "맞춰줘"). In 3D they take
+ *  their column's top-slot angle; the 2D game and picking (distance-based) are unchanged. Slot angles are set once
+ *  and never tweened. */
 function slotRotation(angleDeg: number, rotation: number, side: 'left' | 'right') {
   if (side === 'left' && Math.abs(angleDeg + 12) < 0.5) return -8 * D2R;
-  if (side === 'right' && Math.abs(angleDeg - 8) < 0.5) return 10 * D2R;
+  if (side === 'right' && Math.abs(angleDeg - 12) < 0.5) return 8 * D2R;
   return rotation;
 }
 /**

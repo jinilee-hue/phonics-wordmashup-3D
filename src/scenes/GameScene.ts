@@ -1192,9 +1192,10 @@ export class GameScene extends Phaser.Scene {
     const qf = (fy: number) => Math.round(fy * GH / 720);
 
     const leftPos  = [{ x: 209, y: 185 }, { x: 359, y: 345 }, { x: 153, y: 500 }];
-    const rightPos = [{ x: 1139, y: 175 }, { x: 950, y: 360 }, { x: 1060, y: 510 }];
+    // 오른쪽 = 왼쪽의 좌우 대칭(사용자: "왼쪽과 대칭 되게 배치하면 될거 같아"). 원래: x 1139/950/1060, y 175/360/510, 각도 10/4/8
+    const rightPos = leftPos.map(p => ({ x: 1280 - p.x, y: p.y }));
     const leftAngle  = [-8, -4, -12];
-    const rightAngle = [10,  4,   8];
+    const rightAngle = leftAngle.map(a => -a);
 
     const makeCard = (figX: number, figY: number, angle: number, slotIdx: number, word: string, icon: string, side: 'left' | 'right') => {
       const targetX  = pf(figX);
