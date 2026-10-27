@@ -57,6 +57,7 @@ uniform vec2 uLook;
 uniform float uBlink, uHappy, uSad, uOpen, uFrown, uO, uBlush;
 uniform float uPx;        // one device pixel in body units
 uniform float uTime, uOpacity, uSteps;
+uniform float uInk;       // the dark outline: 1 = full, 0 = none (a soft jelly-coloured edge instead) - the user chose none
 
 float smin(float a, float b, float k) { float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25; }
 float sdEll(vec3 p, vec3 r) { float k0 = length(p / r); float k1 = length(p / (r * r)); return k0 * (k0 - 1.0) / k1; }
@@ -172,22 +173,23 @@ void main() {
   vec2 tb = boxHit(ro, rd);
   float t = max(tb.x, 0.0);
   float tEnd = tb.y;
-  float dmin = 1e9;
+  float dmin = 1e9, tmin = t;
   bool hit = false;
   for (int i = 0; i < 96; i++) {
     if (float(i) >= uSteps) break;
     float d = map(ro + rd * t);
-    dmin = min(dmin, d);
+    if (d < dmin) { dmin = d; tmin = t; }
     if (d < 0.0005) { hit = true; break; }
     t += d * 0.88;
     if (t > tEnd) break;
   }
   vec3 outline = mix(vec3(0.38, 0.29, 0.66), vec3(0.52, 0.15, 0.42), clamp((vPos.y - 0.2) * 1.6, 0.0, 1.0));
   if (!hit) {
-    // outer half of the outline, antialiased (near misses)
-    float w = uPx * 1.7;
+    // outer half of the outline - or without it, a soft jelly-coloured edge - antialiased (near misses)
+    float w = uPx * mix(1.0, 1.7, uInk);
     if (dmin > w) discard;
-    gl_FragColor = vec4(outline, (1.0 - smoothstep(uPx * 0.5, w, dmin)) * 0.92 * uOpacity);
+    vec3 rimCol = jelly((ro + rd * tmin) / uSquash) * 0.82;
+    gl_FragColor = vec4(mix(rimCol, outline, uInk), (1.0 - smoothstep(uPx * 0.5 * uInk, w, dmin)) * mix(0.8, 0.92, uInk) * uOpacity);
     return;
   }
   vec3 p = ro + rd * t;
@@ -261,7 +263,7 @@ void main() {
 
   // inner half of the outline
   float ol = 1.0 - smoothstep(0.1, 0.26, ndv);
-  col = mix(col, outline, ol * 0.72);
+  col = mix(col, outline, ol * 0.72 * uInk);
 
   float alpha = max(1.0 - exp(-th * 10.0), 0.86);
   alpha = max(alpha, max(cover, ol * 0.8));
@@ -525,6 +527,7 @@ export class Glee {
         uBlink: { value: 0 }, uHappy: { value: 0 }, uSad: { value: 0 }, uOpen: { value: 0.85 },
         uFrown: { value: 0 }, uO: { value: 0 }, uBlush: { value: 1 },
         uPx: { value: 0.005 }, uTime: { value: 0 }, uOpacity: { value: 1 }, uSteps: { value: STEPS.high },
+        uInk: { value: 0 },                 // no outline (user: "튜터는 테두리 없음으로"): a soft 3D jelly, not a sticker
       },
     });
     const box = new THREE.BoxGeometry(BOX.x * 2, BOX.y1 - BOX.y0, BOX.z * 2);
