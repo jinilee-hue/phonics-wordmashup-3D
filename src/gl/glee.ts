@@ -99,18 +99,20 @@ float arcUp(vec2 p, float R, float th) {
   return min(length(p - vec2(R, 0.0)), length(p + vec2(R, 0.0))) - th;
 }
 
+// Body colours: yellow on top, mint below (user's pick from the colour mock-ups, 2026-10-27: the sheet's pink and
+// pastel rainbow blended into the pink/violet neon stage - "튜터 캐릭터가 너무 안보인다는 의견")
 vec3 jelly(vec3 q) {
   float y = q.y + 0.06 * q.x;
-  vec3 c = vec3(1.0, 0.86, 0.56);                                  // butter (feet)
-  c = mix(c, vec3(0.62, 0.93, 0.82), smoothstep(0.07, 0.17, y));   // mint
-  c = mix(c, vec3(0.54, 0.77, 1.0), smoothstep(0.15, 0.27, y));    // sky
-  c = mix(c, vec3(0.71, 0.63, 1.0), smoothstep(0.25, 0.37, y));    // periwinkle
-  c = mix(c, vec3(0.94, 0.57, 0.93), smoothstep(0.34, 0.47, y));   // lilac pink
-  c = mix(c, vec3(1.0, 0.52, 0.79), smoothstep(0.44, 0.6, y));     // candy pink
-  c = mix(c, vec3(1.0, 0.47, 0.75), smoothstep(0.72, 0.98, y));    // deeper pink crown
-  // holographic patches in the lower half (peach / blue)
+  vec3 c = vec3(1.0, 0.86, 0.52);                                  // butter (feet)
+  c = mix(c, vec3(0.55, 0.94, 0.82), smoothstep(0.07, 0.17, y));   // mint
+  c = mix(c, vec3(0.46, 0.93, 0.82), smoothstep(0.15, 0.27, y));   // deeper mint
+  c = mix(c, vec3(0.56, 0.95, 0.74), smoothstep(0.25, 0.37, y));   // spring green
+  c = mix(c, vec3(0.93, 0.95, 0.45), smoothstep(0.34, 0.47, y));   // lime-lemon
+  c = mix(c, vec3(1.0, 0.90, 0.32), smoothstep(0.44, 0.6, y));     // lemon
+  c = mix(c, vec3(1.0, 0.82, 0.22), smoothstep(0.72, 0.98, y));    // deeper yellow crown
+  // holographic patches in the lower half (pale mint / blue)
   float hp = sin(q.x * 13.0 + q.y * 7.0 + q.z * 5.0) * sin(q.x * 5.0 - q.y * 11.0 + 1.3);
-  vec3 holo = mix(vec3(1.0, 0.8, 0.55), vec3(0.55, 0.8, 1.0), 0.5 + 0.5 * hp);
+  vec3 holo = mix(vec3(0.70, 1.0, 0.86), vec3(0.56, 0.86, 1.0), 0.5 + 0.5 * hp);
   return mix(c, holo, 0.22 * (1.0 - smoothstep(0.16, 0.45, y)));
 }
 
@@ -244,8 +246,8 @@ void main() {
   vec3 col = alb * (0.68 + 0.4 * dif) * mix(0.8, 1.0, ao);
   col = mix(col, min(alb * 1.15 + 0.06, vec3(1.0)), thin * 0.4);             // light through thin parts
   float edge = pow(1.0 - ndv, 2.0);
-  col = mix(col, col * vec3(0.86, 0.68, 0.92), edge * 0.5);                 // saturated jelly edge
-  col += vec3(0.85, 0.82, 1.0) * pow(1.0 - ndv, 4.0) * 0.3;                // back rim glow
+  col = mix(col, col * vec3(0.82, 0.84, 0.62), edge * 0.5);                 // saturated jelly edge
+  col += vec3(1.0, 1.0, 0.92) * pow(1.0 - ndv, 4.0) * 0.3;                 // back rim glow (warm white)
   vec3 ir = 0.5 + 0.5 * cos(6.2831 * (vec3(0.0, 0.33, 0.67) + (1.0 - ndv) * 1.3 + q.y * 0.8));
   col = mix(col, col * 0.6 + ir * 0.45, pow(1.0 - ndv, 3.0) * 0.3);         // holographic sheen
 
@@ -602,7 +604,7 @@ export class Glee {
     let seed = 7;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
     const pos: number[] = [], phase: number[] = [], size: number[] = [], color: number[] = [];
-    const palette = [[1, 1, 1], [1, 1, 1], [1, 0.86, 0.45], [1, 0.62, 0.86], [0.6, 0.9, 1], [0.7, 1, 0.75]];
+    const palette = [[1, 1, 1], [1, 1, 1], [1, 0.95, 0.6], [0.62, 1, 0.88], [0.62, 0.9, 1], [1, 1, 0.82]];   // matches the yellow/mint body
     let guard = 0;
     while (phase.length < n && guard++ < 20000) {
       const x = (rnd() * 2 - 1) * 0.39, y = 0.14 + rnd() * 0.86, z = (rnd() * 2 - 1) * 0.33;
