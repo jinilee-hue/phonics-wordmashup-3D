@@ -57,6 +57,13 @@ const state = {
   game: null as Phaser.Game | null,
   /** a press that landed on Glee: GameScene must not pick a card with it */
   gleePress: false,
+  /** where the user put Glee with a long press (design px, 1280x720), null = the default spot */
+  gleeSpot: null as { x: number; y: number } | null,
+  /** the spot Glee is shown at (design px): eases to gleeSpot when she steps off a card */
+  gleeShow: null as { x: number; y: number } | null,
+  gleeSpotKey: '',
+  /** tests: is Glee standing at game px (x, y) on a card? */
+  gleeBlockedAt: (x: number, y: number) => (state.scene ? gleeBlocked(state.scene, x, y) : false),
   /** hide Phaser's cards while the camera is in flight (they wait at their slots) */
   travelHide: false,
   scene: null as Any,
@@ -428,10 +435,81 @@ function showHint3D(scene: Any) {
 }
 
 /** Glee's spot: the left front of the round stage, under the week/base cards and left of the
- *  result card, just above the Replay/Mic buttons (design canvas 1280x720, like GameScene). */
-function placeGlee(s: Any) {
+ *  result card, just above the Replay/Mic buttons (design canvas 1280x720, like GameScene).
+ *  A long press picks her up and she can be put anywhere (user: "튜터 위치 사용자가 조절할수 있게"):
+ *  that spot is remembered per browser (localStorage). */
+const GLEE_SPOT_KEY = 'wm3d-glee-spot-v1';
+function placeGlee(s: Any, dt: number) {
   const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy);
-  state.glee!.place(445 * sx, 640 * sy, 125 * su, 0.36);
+  if (!state.gleeSpot) { state.glee!.place(445 * sx, 640 * sy, 125 * su, 0.36); return; }
+  const moving = gleeDrag?.mode === 'move';
+  if (!moving) {
+    // not on a card: after a drop, a resize, or a spot saved on another screen size, she steps to the nearest free place
+    const n = (s.leftCards ?? []).length + (s.rightCards ?? []).length;
+    const key = `${s.gw}x${s.gh}:${state.gleeSpot.x.toFixed(1)},${state.gleeSpot.y.toFixed(1)}:${n}`;
+    if (key !== state.gleeSpotKey) {
+      state.gleeSpot = freeGleeSpot(s, state.gleeSpot.x, state.gleeSpot.y);
+      state.gleeSpotKey = `${s.gw}x${s.gh}:${state.gleeSpot.x.toFixed(1)},${state.gleeSpot.y.toFixed(1)}:${n}`;
+    }
+  }
+  const want = clampGleeSpot(s, state.gleeSpot.x, state.gleeSpot.y);
+  const sh = state.gleeShow ?? (state.gleeShow = { ...want });
+  const k = moving ? 1 : 1 - Math.exp(-dt * 12);
+  sh.x += (want.x - sh.x) * k; sh.y += (want.y - sh.y) * k;
+  const yaw = Math.max(-0.45, Math.min(0.45, (0.36 * (640 - sh.x)) / 195));   // turned toward the middle (0.36 at x 445)
+  state.glee!.place(sh.x * sx, sh.y * sy, 125 * su, yaw);
+}
+/** Is Glee, feet at game px (x, y), standing on a card? Then the card under her could not be picked up
+ *  (a press on her wins), so she may not stay there. 12 px of overlap at the edges is fine. */
+function gleeBlocked(s: Any, x: number, y: number) {
+  const h = 125 * Math.min(s.gw / 1280, s.gh / 720), tol = 12;
+  const l = x - 0.45 * h + tol, r = x + 0.45 * h - tol, t = y - 1.18 * h + tol, b = y + 0.04 * h - tol;
+  for (const c of [...(s.leftCards ?? []), ...(s.rightCards ?? [])]) {
+    if (!c?.active) continue;
+    const a = ((c.angle ?? 0) * Math.PI) / 180, k = c.baseScale ?? 1;
+    const hw = (Math.abs(100 * Math.cos(a)) + Math.abs(134 * Math.sin(a))) * k;   // the card (200 x 268) turned, as a box
+    const hh = (Math.abs(100 * Math.sin(a)) + Math.abs(134 * Math.cos(a))) * k;
+    const cx = c.baseX ?? c.x, cy = c.baseY ?? c.y;
+    if (r > cx - hw && l < cx + hw && b > cy - hh && t < cy + hh) return true;
+  }
+  return false;
+}
+/** the nearest spot (design px) to (x, y) inside the clamp where Glee is not on a card */
+function freeGleeSpot(s: Any, x: number, y: number) {
+  const sx = s.gw / 1280, sy = s.gh / 720;
+  const p0 = clampGleeSpot(s, x, y);
+  const free = (q: { x: number; y: number }) => !gleeBlocked(s, q.x * sx, q.y * sy);
+  if (free(p0)) return p0;
+  for (let r = 8; r <= 900; r += 8) {                       // rings of growing radius (game px); the first hit is nearest
+    const n = Math.max(12, Math.round((2 * Math.PI * r) / 8));
+    let best: { x: number; y: number } | null = null, bd = Infinity;
+    for (let i = 0; i < n; i++) {
+      const a = (2 * Math.PI * i) / n;
+      const q = clampGleeSpot(s, p0.x + (r * Math.cos(a)) / sx, p0.y + (r * Math.sin(a)) / sy);
+      if (!free(q)) continue;
+      const d = Math.hypot((q.x - p0.x) * sx, (q.y - p0.y) * sy);
+      if (d < bd) { bd = d; best = q; }
+    }
+    if (best) return best;
+  }
+  return p0;
+}
+/** Where Glee may stand (design px in and out): whole body on screen, head below the top HUD bar, and not
+ *  over the bottom buttons (Replay..Home span x 301..979 from y 648) - she would hide behind them and a press
+ *  there would hit both. The bottom corners beside the buttons are free. */
+function clampGleeSpot(s: Any, x: number, y: number) {
+  const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy), h = 125 * su;
+  const gx = Math.max(0.5 * h, Math.min(s.gw - 0.5 * h, x * sx));
+  const top = 13 * sy + 72 * su + 1.22 * h;
+  const overNav = gx + 0.5 * h > 301 * sx && gx - 0.5 * h < 979 * sx;
+  const gy = Math.max(top, Math.min(overNav ? 648 * sy : s.gh - 0.08 * h, y * sy));
+  return { x: gx / sx, y: gy / sy };
+}
+function loadGleeSpot() {
+  try {
+    const v = JSON.parse(localStorage.getItem(GLEE_SPOT_KEY) ?? 'null');
+    if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) state.gleeSpot = { x: v.x, y: v.y };
+  } catch { /* no storage: the default spot */ }
 }
 
 function frame(game: Phaser.Game) {
@@ -460,7 +538,8 @@ function frame(game: Phaser.Game) {
   state.travel!.update(dt);
   if (DEMO_FLY && !state.travel!.active) flyDemo(stage, t);
   if (state.glee) {
-    placeGlee(s);
+    if (gleeDrag && gleeDrag.mode === 'press' && now - gleeDrag.t0 >= LONG_PRESS) pickUpGlee();
+    placeGlee(s, dt);
     state.glee.setPortal(s.cx, s.cy, s.zoneR);
     const d = s.dragCard;
     state.glee.dragTarget = d?.active ? { x: d.x, y: d.y } : null;
@@ -559,9 +638,14 @@ function fpsMeter(dt: number) {
 }
 
 // ── the mouse / finger: Glee follows it, a tap pokes her, a drag spins her round (left-right) or flips her
-//    (up-down) and she springs back to face the front - like the pink bell in Halli Galli 3D ──
+//    (up-down) and she springs back to face the front - like the pink bell in Halli Galli 3D. A long press
+//    (LONG_PRESS ms without moving) picks her up instead: she follows the finger and stays where she is put ──
+const LONG_PRESS = 450;
 const ptr = { x: 0, y: 0, t: -1e9, mouse: true, inside: true };
-type GleeDrag = { id: number; x0: number; y0: number; x: number; y: number; moved: boolean; axis: 'x' | 'y' | ''; hist: { t: number; dx: number; dy: number }[] };
+type GleeDrag = {
+  id: number; x0: number; y0: number; x: number; y: number; moved: boolean; axis: 'x' | 'y' | ''; hist: { t: number; dx: number; dy: number }[];
+  t0: number; mode: 'press' | 'spin' | 'move'; ox: number; oy: number;
+};
 let gleeDrag: GleeDrag | null = null;
 function gamePoint(cx: number, cy: number) {
   const g = state.game, c = g?.canvas;
@@ -570,14 +654,31 @@ function gamePoint(cx: number, cy: number) {
   if (!r.width || !r.height) return null;
   return { x: ((cx - r.left) * g.scale.width) / r.width, y: ((cy - r.top) * g.scale.height) / r.height };
 }
+/** the long press has run out without a move: pick Glee up (the grab point stays under the finger) */
+function pickUpGlee() {
+  const d = gleeDrag!, g = state.glee, s = state.scene;
+  if (!g || !s) return;
+  d.mode = 'move';
+  const sx = s.gw / 1280, sy = s.gh / 720;
+  const cur = state.gleeShow && state.gleeSpot ? { ...state.gleeShow } : { x: 445, y: 640 };
+  d.ox = cur.x * sx - d.x; d.oy = cur.y * sy - d.y;
+  g.held = true;
+  navigator.vibrate?.(12);
+}
 function dragGlee(x: number, y: number) {
   const d = gleeDrag!, g = state.glee, st = state.stage;
   if (!g || !st) return;
   const dx = x - d.x, dy = y - d.y, now = performance.now();
   d.x = x; d.y = y;
+  if (d.mode === 'move') {
+    const s = state.scene, sx = s.gw / 1280, sy = s.gh / 720;
+    state.gleeSpot = clampGleeSpot(s, (x + d.ox) / sx, (y + d.oy) / sy);
+    return;
+  }
   if (!d.moved) {
     if (Math.hypot(x - d.x0, y - d.y0) < 9) return;
     d.moved = true;
+    d.mode = 'spin';
     d.axis = Math.abs(x - d.x0) >= Math.abs(y - d.y0) ? 'x' : 'y';     // one axis per drag, so she doesn't wobble
     g.spin.held = g.flip.held = true;
   }
@@ -593,6 +694,12 @@ function endGleeDrag(e: PointerEvent) {
   state.gleePress = false;
   const g = state.glee, st = state.stage;
   if (!g || !st) return;
+  if (d.mode === 'move') {
+    g.drop();
+    if (state.scene && state.gleeSpot) state.gleeSpot = freeGleeSpot(state.scene, state.gleeSpot.x, state.gleeSpot.y);   // off a card
+    try { localStorage.setItem(GLEE_SPOT_KEY, JSON.stringify(state.gleeSpot)); } catch { /* private mode: this visit only */ }
+    return;
+  }
   if (!d.moved) { g.poke(); state.tutor?.onPoke(); return; }
   const now = performance.now(), h = d.hist.filter(p => now - p.t < 90);
   const span = h.length ? Math.max(16, now - h[0].t) : 16;
@@ -620,10 +727,12 @@ function listenPointer() {
     if (!state.on || !g || !s || e.button > 0 || gleeDrag || s.dragCard || s.collectionOpen) return;
     if (document.getElementById('intro-overlay') || !g.hitTest(p.x, p.y)) return;
     state.gleePress = true;
-    gleeDrag = { id: e.pointerId, x0: p.x, y0: p.y, x: p.x, y: p.y, moved: false, axis: '', hist: [] };
+    gleeDrag = { id: e.pointerId, x0: p.x, y0: p.y, x: p.x, y: p.y, moved: false, axis: '', hist: [], t0: performance.now(), mode: 'press', ox: 0, oy: 0 };
   }, { capture: true, passive: true });
   addEventListener('pointerup', endGleeDrag, { capture: true, passive: true });
   addEventListener('pointercancel', endGleeDrag, { capture: true, passive: true });
+  // a long press on a touch screen must not open a context menu
+  addEventListener('contextmenu', e => { if (gleeDrag) e.preventDefault(); }, { capture: true });
   document.documentElement.addEventListener('mouseleave', () => { ptr.inside = false; });
   addEventListener('blur', () => { ptr.inside = false; });
 }
@@ -675,11 +784,13 @@ export function start3D(game: Phaser.Game) {
   const { mode, forced } = pickMode();
   state.game = game;
   state.mode = mode; state.forced = forced;
+  loadGleeSpot();
   (window as Any).WM3D = state;
   if (mode === '2d') return;
   const css = document.createElement('style');
   css.textContent = `
     .wm3d-canvas { position: fixed; left: 0; top: 0; z-index: 0; pointer-events: none; display: block; }
+    #game-container canvas { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
     #game-container > canvas:not(.wm3d-canvas) { position: relative; z-index: 1; }`;
   document.head.appendChild(css);
   const begin = () => {

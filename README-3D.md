@@ -48,6 +48,13 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
 - `?pose=돌림,젖힘,화면기울기비율,두께` 카드 각도 비교용 (예: `?pose=28,10,1,30`)
 - `?glee=off` 글리 끄기
 
+## 글리 옮기기
+- **길게 누르고(0.45초) 끌면** 글리가 들려 올라와 손가락을 따라오고, 놓은 자리에 서요. 짧게 끌면 지금처럼 빙글 돌고, 톡 누르면 말해요.
+- 놓은 자리는 브라우저에 기억돼요(localStorage `wm3d-glee-spot-v1`, 1280×720 기준 좌표). 기본 자리(445, 640)는 그대로예요.
+- 놓을 수 있는 곳: 화면 어디든. 단, 머리는 위쪽 점수판 아래, 아래쪽 버튼 줄(Replay~Home) 위에는 못 서요. 카드 위에 놓으면 카드를 못 집게 되니 가장 가까운 빈 곳으로 비켜 서요.
+- 라운드 사이 달리기는 놓은 자리에서 출발해 돌아와요(존 오른쪽에 있으면 방향이 반대로).
+- 확인: `uv run --with playwright --with pillow python tools/qa/glee_move.py [base_url]`
+
 ## 단어 카드 추가하기
 1. 그림을 `Word Mashup/Images/`에 넣는다: 왼쪽 `card_left_<단어>.png`, 오른쪽 `card_right_<단어>.png`, 결과 `card_<합성어>.png`.
 2. `src/data/compounds.ts`의 `COMPOUND_PAIRS`에 한 줄 추가한다(word1 + word2 = result). 게임은 이 목록에서 카드 그림을 불러오고, 보기 카드도 이 목록으로 정답이 하나만 되게 고른다.

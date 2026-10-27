@@ -543,6 +543,11 @@ export class Glee {
   override: { x: number; y: number; h: number; yaw?: number; pitch?: number } | null = null;
   reduced = false;
   visible = true;
+  /** picked up by a long press: index.ts moves her home with the finger; she floats above her shadow until drop() */
+  held = false;
+  private lift = 0;
+  private swayV = 0;
+  private lastX = 0;
   dragTarget: Pt | null = null;
 
   constructor(private stage: Stage) {
@@ -668,6 +673,12 @@ export class Glee {
 
   /** a tap: squash, boing, giggle eyes */
   poke() { this.pokeT0 = this.t; }
+
+  /** put down after a long-press move: a little squash as she lands */
+  drop() { this.held = false; this.play([{ kind: 'land', t0: this.t, dur: 0.35 }]); }
+
+  /** 1 when home is left of the zone (the default spot), -1 right of it: the run's turns mirror with it */
+  private runSide() { return clamp((this.portal.x - this.home.x) / (0.15 * this.stage.W), -1, 1); }
 
   /** tutor: point at the targets in turn (switching at `split` of `dur`) */
   pointAt(targets: Pt[], dur: number, split = 0.5) {
@@ -886,7 +897,8 @@ export class Glee {
       const l = lin(0.76, 1.03, u);                          // 3) leap into the portal
       const ph = 2 * Math.PI * RUN_FREQ * Math.max(0, u - 0.1);
       const amp = lin(0.08, 0.2, u) * (1 - lin(0.72, 0.8, u));
-      F.yaw = lerp(this.runFrom.yaw, YAW_IN, turn);
+      const side = this.runSide();
+      F.yaw = lerp(this.runFrom.yaw, (side < 0 ? -1 : 1) * lerp(Math.PI, YAW_IN, Math.abs(side)), turn);
       F.pitch = 0.28 * turn * (1 - 0.6 * l);
       F.lean = 0.1 * amp * Math.sin(ph);
       F.sy = 1 - 0.1 * Math.sin(Math.PI * lin(0.04, 0.16, u)) - 0.06 * amp * Math.cos(2 * ph);
@@ -914,7 +926,7 @@ export class Glee {
       const q = 1 - Math.pow(1 - lin(0.33, 1.0, a), 2.2);    // 2) run home, slowing down at the end
       const ph = 2 * Math.PI * RUN_FREQ * Math.max(0, a - 0.33);
       const amp = lin(0.33, 0.42, a) * (1 - lin(0.86, 1.0, a));
-      F.yaw = lerp(0, YAW_OUT, easeInOut(lin(0.3, 0.45, a)));
+      F.yaw = lerp(0, YAW_OUT * this.runSide(), easeInOut(lin(0.3, 0.45, a)));
       F.pitch = 0.2 * amp;
       F.lean = 0.1 * amp * Math.sin(ph);
       F.sy = 1 - 0.06 * amp * Math.cos(2 * ph) - 0.12 * Math.sin(Math.PI * lin(0.33, 0.43, a));
@@ -1024,9 +1036,22 @@ export class Glee {
         else this.nextWave = Math.max(this.nextWave, t + 5);     // no idle wave right after a reaction
       }
       if (this.mode || this.talk !== null) this.nextWave = Math.max(this.nextWave, t + 6);   // no idle wave mid-conversation
-      if (!this.act && t > this.nextWave) { this.play([{ kind: 'wave', t0: t, dur: 1.8 }]); this.nextWave = t + 11 + Math.random() * 6; }
+      if (!this.act && !this.held && t > this.nextWave) { this.play([{ kind: 'wave', t0: t, dur: 1.8 }]); this.nextWave = t + 11 + Math.random() * 6; }
       // pose: analytic target, then ease toward it (jump stays analytic)
       this.jump = this.targetPose(t, g);
+      // held by a long press: lifted above her shadow, arms up, a small "o", swinging against the move
+      this.lift += ((this.held ? 1 : 0) - this.lift) * (1 - Math.exp(-dt * (this.held ? 14 : 9)));
+      const vx = dt > 0 ? (P.x - this.lastX) / dt : 0;
+      this.lastX = P.x;
+      this.swayV += (clamp(vx, -4000, 4000) - this.swayV) * (1 - Math.exp(-dt * 10));
+      if (this.lift > 0.002) {
+        const L = this.lift, up: Arm = { th: 2.3, ph: 0.25, len: 0.25 };
+        g.armL = mixArm(g.armL, up, L); g.armR = mixArm(g.armR, up, L);
+        g.o = Math.max(g.o, 0.7 * L); g.open = lerp(g.open, 0.3, L); g.happy *= 1 - L;
+        g.lean += (this.reduced ? 0 : clamp((-0.6 * this.swayV) / st.W, -0.3, 0.3)) * L;
+        g.sy = lerp(g.sy, 1.06, L);
+        this.jump += 0.2 * L;
+      }
       const k = (r: number) => (this.freezeAt !== null ? 1 : 1 - Math.exp(-dt * r));
       const ease = (a: number, b: number, r: number) => a + (b - a) * k(r);
       for (const side of ['armL', 'armR'] as const) {
