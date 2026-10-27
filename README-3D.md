@@ -25,6 +25,7 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
     - 반응: 시작 인사(손 흔들기), 카드를 잡으면 그 카드를 봄, 존에 넣으면 끄덕, 오답이면 슬픔(눈물·땀방울) 후 격려, 정답이면 환호(점프·하트·별), 힌트를 누르면 정답 카드를 차례로 가리킴, 마지막 화면에서 계속 환호.
     - 공간 이동 때 달리기(이동 시계로 구동): 등을 돌려 분홍 길을 따라 존까지 달려가 포털로 뛰어들고(카메라가 뒤따라감, 섬광 속에 사라짐) → 도착 영상이 끝나고 존이 솟으면 포털에서 튀어나와 플레이어 쪽을 보며 제자리로 달려옴 → 360도 한 바퀴 돌고 착지. 발걸음마다 먼지 구름. 움직임 줄이기 설정이면 이동 자체가 없어서 달리지 않는다.
     - 포인터(할리갈리 핑크벨 방식): 마우스·손가락 쪽으로 몸과 눈을 돌린다. 잡고 돌리면 손을 따라 돌고, 놓으면 그 속도로 미끄러지다 가장 가까운 정면으로 돌아온다. 아래로 끌면 공중제비, 콕 찌르면 찌그러지며 뛴다. 글리를 잡는 동안 카드는 잡히지 않는다.
+    - 테두리 선 없음(검은 외곽선 대신 몸빛 가장자리). 가장자리는 한 픽셀 안을 4개 광선(낮은 품질은 2개)으로 나눠 쏘아 계단 없이 매끄럽게 그린다.
     - 2D 모드(`?q=2d`, 느린 기기 폴백)에는 나오지 않는다.
   - `src/gl/tutor.ts` — 글리가 말로 게임을 이끈다(말풍선·글자 없이 음성만, 정해진 영어 문장 + 브라우저 음성 인식. 조직 정책상 LLM 대화는 쓰지 않음). 한 번에 한 명만 말하고, 아이가 움직이면 글리가 말을 멈춘다. 듣는 동안은 머리 옆에 귀 아이콘만 보인다(뒤에 배지 없이 배경이 비침).
     - 라운드: "Which two go together?" → 듣기 → 카드 단어를 말하면 그 카드를 넣고 "What goes with pan?" → 맞으면 "Pan and cake make... pancake!" → "Say it with me!" → 못 알아들으면 "Listen! Pan! Cake! Pancake! Your turn!" → 칭찬 → 다음 판.
@@ -32,6 +33,7 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
     - 음성: `tools/build_glee_voice.py`(edge-tts `en-US-AnaNeural`, 시제품용) → `public/gl/voice/*.mp3`, `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다.
 - 배경 깊이: `tools/build_depth.py`가 배경 그림의 깊이 지도(Depth Anything V2 Small, 로컬 CPU)를 만들어 `public/gl/bg_depth.png`에 저장 → 배경이 입체 부조가 되어 카메라가 움직이면 시차가 생긴다(정지 화면은 원본과 똑같다).
   - 실행: `uv run --with torch --with transformers --with pillow --with numpy python tools/build_depth.py`
+- 인트로 영상(`Word Mashup/Word Mashup.mp4`): 오른쪽 아래 Gemini(Veo) 반짝이 마크를 지운 판. 마크가 반투명하게 섞인 식을 거꾸로 풀어 원래 화면을 되살렸다(지우개로 칠한 것이 아님). 마크 모양은 GeminiWatermarkTool(MIT, allenk)의 보정 마스크, 세기는 프레임마다 가장자리가 사라지도록 맞춤. 마크 밖 화면과 소리는 그대로(재인코딩만). 마크가 있던 원래 영상은 git 기록(`a489ef7` 이전)과 원본 저장소에 있다.
 - 카드 앞면: `tools/unwarp_cards.py`가 원본 카드 그림(기울기·두께가 그려진 PNG)에서 앞면만 찾아 정면으로 편다 → `public/gl/cards/*.webp`, `src/gl/cardFaces.ts`.
   - 실행: `uv run --with pillow --with numpy python tools/unwarp_cards.py [--debug DIR]`
   - 텍스처는 불투명: 모양은 3D 앞면 도형이 자르고, 가장자리 5px은 안쪽 색으로 다시 채운다(벽색·번짐 제거). 실행하면 그림 모서리 반지름 측정값도 출력한다.
