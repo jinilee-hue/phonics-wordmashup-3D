@@ -48,6 +48,15 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
 - `?pose=돌림,젖힘,화면기울기비율,두께` 카드 각도 비교용 (예: `?pose=28,10,1,30`)
 - `?glee=off` 글리 끄기
 
+## 단어 카드 추가하기
+1. 그림을 `Word Mashup/Images/`에 넣는다: 왼쪽 `card_left_<단어>.png`, 오른쪽 `card_right_<단어>.png`, 결과 `card_<합성어>.png`.
+2. `src/data/compounds.ts`의 `COMPOUND_PAIRS`에 한 줄 추가한다(word1 + word2 = result). 게임은 이 목록에서 카드 그림을 불러오고, 보기 카드도 이 목록으로 정답이 하나만 되게 고른다.
+3. 3D 카드 앞면(새 카드만 만들고 기존 카드는 그대로):
+   `uv run --with pillow --with numpy python tools/unwarp_cards.py --debug <폴더> left_<단어> right_<단어> ...`
+   → `public/gl/cards/*.webp` + `src/gl/cardFaces.ts`에 추가. `--debug` 시트로 잘림을 눈으로 확인.
+4. 글리 목소리: `uv run --with edge-tts --with numpy python tools/build_glee_voice.py` (새 대사만 내려받고 기존 파일은 그대로).
+- 2026-10-27: 교재 합성어 13개 추가(backpack, basketball, mailbox, playpen, popcorn, raincoat, shoelace, treetop, wheelchair, peanut, spaceship, starlight, windmill) → 43개.
+
 ## 배경 A안 시험 (기본 화면은 그대로)
 - `?bg=layers`: 배경 그림을 깊이별 4층(하늘, 먼 섬·풍선·게이트·구름, 바닥·옆 발판, 앞 구름)으로 나눠 각 층을 자기 깊이의 입체판으로 그린다. 앞 층이 가리던 부분은 미리 채워 두었다(하늘: 주변 하늘색으로 부드럽게, 섬·바닥 뒤: LaMa 로컬 인페인팅). 파일은 `public/gl/layers/`(약 410KB). 멈춘 화면은 원래 그림과 같다(합성 PSNR 43dB). 만든 스크립트는 아직 저장소 밖(scratch)에 있어서, A안을 쓰기로 하면 `tools/`로 옮긴다.
 - `?fly=1`: 배경 시연 비행. 11초 반복(정지, 왼쪽, 오른쪽, 게이트 쪽으로 들어갔다 나옴). 지금 방식은 `?fly=1`, A안은 `?bg=layers&fly=1`로 비교한다. 들어가는 깊이는 게이트까지의 35%다. 시험 비행에서 37% 정도까지는 그림이 버티고 45%를 넘으면 번졌다. 날아가는 동안 게임 입력은 카메라를 따라가지 않는다.

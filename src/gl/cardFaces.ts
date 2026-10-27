@@ -157,5 +157,68 @@ export const CARD_FACES: Record<string, { rim: string }> = {
   },
   "right_shell": {
     "rim": "#a5d4d4"
+  },
+  "left_back": {
+    "rim": "#fbd0af"
+  },
+  "left_basket": {
+    "rim": "#f4e1be"
+  },
+  "left_mail": {
+    "rim": "#b0d3e9"
+  },
+  "left_pea": {
+    "rim": "#c7e3bb"
+  },
+  "left_pop": {
+    "rim": "#fbbaad"
+  },
+  "left_shoe": {
+    "rim": "#c1ceef"
+  },
+  "left_space": {
+    "rim": "#374a6f"
+  },
+  "left_tree": {
+    "rim": "#bed48c"
+  },
+  "left_wheel": {
+    "rim": "#f9c475"
+  },
+  "left_wind": {
+    "rim": "#c1ddee"
+  },
+  "right_box": {
+    "rim": "#d4a574"
+  },
+  "right_chair": {
+    "rim": "#e4b57f"
+  },
+  "right_coat": {
+    "rim": "#75978e"
+  },
+  "right_corn": {
+    "rim": "#f7d061"
+  },
+  "right_lace": {
+    "rim": "#f1aba3"
+  },
+  "right_mill": {
+    "rim": "#cebba4"
+  },
+  "right_nut": {
+    "rim": "#9e6137"
+  },
+  "right_pack": {
+    "rim": "#9d5f35"
+  },
+  "right_pen": {
+    "rim": "#a3c3d8"
+  },
+  "right_ship": {
+    "rim": "#a5c4db"
+  },
+  "right_top": {
+    "rim": "#f3bb38"
   }
 };

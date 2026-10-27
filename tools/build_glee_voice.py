@@ -108,17 +108,32 @@ SPOKEN_BY_VOICE = {
         'mk_eyeball': 'Eye, and ball, make... eyeball!',
         'ok_note': 'Note, is right!',
     },
+    # 2026-10-27 card words, Whisper medium on the clip as shipped (cut): 'Ship!' -> 'Shit', 'Pop!' -> 'Pah!',
+    # 'Chair is right!' -> 'Cher is right'. Back/Pack/Mill/Wheel came out wrong in all 26 variants tried
+    # (scratch wm/voice_fix_ana2.py): left as is - Ana's short one-word lines, the voice the user chose.
+    'en-US-AnaNeural': {
+        'w_ship': 'Ship.',
+        'w_pop': 'Pop...',
+        'ok_chair': 'Chair, is right!',
+    },
 }
 SPOKEN = SPOKEN_BY_VOICE.get(VOICE, {})
 assert set(SPOKEN) <= set(LINES), set(SPOKEN) - set(LINES)
 spoken = lambda i, t: SPOKEN.get(i, t)
+# Slower for single lines (same voice) when no spelling fixes them: Ana's 'Chair!' -> 'Share', 'Corn!' -> 'C.O.N.' at -5%.
+# Lines at the default rate keep their old cache keys, so their clips stay byte-identical.
+RATE_BY_VOICE = {'en-US-AnaNeural': {'w_chair': '-20%', 'w_corn': '-20%'}}
+LINE_RATE = RATE_BY_VOICE.get(VOICE, {})
+assert set(LINE_RATE) <= set(LINES), set(LINE_RATE) - set(LINES)
+rate_of = lambda i: LINE_RATE.get(i, RATE)
 
 FR = int(SR * .01)            # 10 ms frames
 MOUTH_MS = 60
 
 
 def key(i, t):
-    return f'{i}_{hashlib.md5(t.encode()).hexdigest()[:8]}'
+    r = rate_of(i)
+    return f'{i}_{hashlib.md5((t if r == RATE else f"{t}@{r}").encode()).hexdigest()[:8]}'
 
 
 async def fetch_all():
@@ -130,9 +145,9 @@ async def fetch_all():
         for attempt in range(5):
             try:
                 try:
-                    comm = edge_tts.Communicate(t, VOICE, rate=RATE, pitch=PITCH, boundary='WordBoundary')
+                    comm = edge_tts.Communicate(t, VOICE, rate=rate_of(i), pitch=PITCH, boundary='WordBoundary')
                 except TypeError:                                   # older edge-tts: word boundaries by default
-                    comm = edge_tts.Communicate(t, VOICE, rate=RATE, pitch=PITCH)
+                    comm = edge_tts.Communicate(t, VOICE, rate=rate_of(i), pitch=PITCH)
                 audio, marks = bytearray(), []
                 async for ch in comm.stream():
                     if ch['type'] == 'audio':

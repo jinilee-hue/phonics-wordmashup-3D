@@ -39,6 +39,20 @@ export const COMPOUND_PAIRS: CompoundPair[] = [
   { word1:'week',   word2:'end',     result:'weekend',    icon1:'📅', icon2:'🎉', iconResult:'🥳', pron:'WEEK · end' },
   { word1:'light',  word2:'house',   result:'lighthouse', icon1:'💡', icon2:'🏠', iconResult:'🗼', pron:'LIGHT · house' },
   { word1:'news',   word2:'paper',   result:'newspaper',  icon1:'📢', icon2:'📄', iconResult:'📰', pron:'NEWS · pa · per' },
+  // 교재 합성어 1차(2026-10-27 카드 추가)
+  { word1:'back',   word2:'pack',    result:'backpack',   icon1:'🔙', icon2:'📦', iconResult:'🎒', pron:'BACK · pack' },
+  { word1:'basket', word2:'ball',    result:'basketball', icon1:'🧺', icon2:'⚪', iconResult:'🏀', pron:'BAS · ket · ball' },
+  { word1:'mail',   word2:'box',     result:'mailbox',    icon1:'✉️', icon2:'📦', iconResult:'📫', pron:'MAIL · box' },
+  { word1:'play',   word2:'pen',     result:'playpen',    icon1:'🎮', icon2:'🖊️', iconResult:'🧸', pron:'PLAY · pen' },
+  { word1:'pop',    word2:'corn',    result:'popcorn',    icon1:'💥', icon2:'🌽', iconResult:'🍿', pron:'POP · corn' },
+  { word1:'rain',   word2:'coat',    result:'raincoat',   icon1:'🌧️', icon2:'🧥', iconResult:'🧥', pron:'RAIN · coat' },
+  { word1:'shoe',   word2:'lace',    result:'shoelace',   icon1:'👟', icon2:'🧵', iconResult:'👟', pron:'SHOE · lace' },
+  { word1:'tree',   word2:'top',     result:'treetop',    icon1:'🌳', icon2:'🔝', iconResult:'🌳', pron:'TREE · top' },
+  { word1:'wheel',  word2:'chair',   result:'wheelchair', icon1:'🛞', icon2:'🪑', iconResult:'🦽', pron:'WHEEL · chair' },
+  { word1:'pea',    word2:'nut',     result:'peanut',     icon1:'🫛', icon2:'🌰', iconResult:'🥜', pron:'PEA · nut' },
+  { word1:'space',  word2:'ship',    result:'spaceship',  icon1:'🌌', icon2:'🚢', iconResult:'🚀', pron:'SPACE · ship' },
+  { word1:'star',   word2:'light',   result:'starlight',  icon1:'⭐', icon2:'💡', iconResult:'✨', pron:'STAR · light' },
+  { word1:'wind',   word2:'mill',    result:'windmill',   icon1:'🌬️', icon2:'🏭', iconResult:'🌀', pron:'WIND · mill' },
 ];
 
 const SCHEMES = [

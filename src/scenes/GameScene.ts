@@ -74,12 +74,11 @@ export class GameScene extends Phaser.Scene {
     this.load.image('icon_star',  './images/icon_star_v2.png');
     this.load.image('icon_money', './images/icon_money_v2.png');
     this.load.image('icon_gem',   './images/icon_gemstone_v2.png');
-    // Word-specific card images (left)
-    // 'cake'는 word1로 쓰이지 않고 card_left_cake.png도 없어 제외(404 방지)
-    ['base','birth','book','butter','cup','door','eye','fire','foot','hand','key','light','moon','news','note','pan','play','rain','sea','snow','star','sun','tea','tooth','water','week']
+    // Word-specific card images (left / right): compounds.ts의 word1 / word2에서 자동으로 만든다.
+    // 단어를 추가하면 여기는 고칠 필요 없음('cake'는 word2에만 있어 card_left_cake 404도 생기지 않음)
+    [...new Set(COMPOUND_PAIRS.map(p => p.word1))]
       .forEach(w => this.load.image(`card_left_${w}`, `./images/card_left_${w}.png`));
-    // Word-specific card images (right)
-    ['bag','ball','bell','board','book','bow','brush','cake','day','end','fall','fish','flake','flower','fly','ground','house','light','melon','paper','place','pot','rise','set','shelf','shell']
+    [...new Set(COMPOUND_PAIRS.map(p => p.word2))]
       .forEach(w => this.load.image(`card_right_${w}`, `./images/card_right_${w}.png`));
     // Combined-word result cards (e.g. card_pancake.png). Loaded for every compound;
     // any not yet uploaded simply fail to register and fall back to the drawn card.
