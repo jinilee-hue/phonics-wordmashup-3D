@@ -14,6 +14,16 @@ import { cardShadowTexture, dotTexture, hazeTexture } from './textures';
 const FW = 184;
 const FH = FW / FACE_ASPECT;          // 245
 const D2R = Math.PI / 180;
+
+/** In-plane tilt of a 3D card. The 2D layout tilts the BOTTOM slots off the pattern of the others (left -12 deg vs
+ *  -8 / -4, right +8 vs +10 / +4: GameScene leftAngle/rightAngle), which read as a different angle in 3D (user:
+ *  "좌우 맨 아래 카드만 다른 카드들과 각도가 다른거 같은데" -> "맞춰줘"). In 3D they take their column's top-slot
+ *  angle; the 2D game and picking (distance-based) are unchanged. Slot angles are set once and never tweened. */
+function slotRotation(angleDeg: number, rotation: number, side: 'left' | 'right') {
+  if (side === 'left' && Math.abs(angleDeg + 12) < 0.5) return -8 * D2R;
+  if (side === 'right' && Math.abs(angleDeg - 8) < 0.5) return 10 * D2R;
+  return rotation;
+}
 /**
  * Card pose, measured against the line of sight from the resting camera (not world axes), so every
  * card shows the same pose wherever it sits on screen - like the art, where all left cards show the
@@ -304,7 +314,7 @@ export class Cards3D {
     // relative pose targets: rotation.y (+ turns the face right), rotation.x (+ tilts the face down)
     let yawT = sign * (dragging ? 0 : inZone ? 8 : pose.yaw) * D2R;
     let pitchT = -(dragging ? 2 : inZone ? 0 : pose.pitch) * D2R;
-    let rollT = inZone ? 0 : -card.rotation * pose.roll;
+    let rollT = inZone ? 0 : -slotRotation(card.angle, card.rotation, c.side) * pose.roll;
     if (!dragging) {
       yawT += Math.sin(t * 0.55 + c.phase) * 0.025;
       pitchT += Math.sin(t * 0.43 + c.phase * 1.3) * 0.02;
