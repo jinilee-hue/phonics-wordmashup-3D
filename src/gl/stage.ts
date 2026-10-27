@@ -21,6 +21,39 @@ const SEG_X = 160, SEG_Y = 90;
 /** Where the camera flies to between rounds: the arch gate in the painting (u, v from top-left). */
 export const GATE_UV = { u: 0.5, v: 0.5 };
 
+type Depth = { data: Float32Array; w: number; h: number };
+/** One cut of the painting for the layered backdrop: RGBA image (premultiplied on upload), its own 8-bit disparity
+ *  (255 = near) and where it sits in the painting (u0, v0, u1, v1; v from the top). */
+export type BgLayer = { img: HTMLImageElement; depth: HTMLImageElement; rect: [number, number, number, number] };
+/** Layers past the first: blended (premultiplied) but drawn in the opaque pass, in order, before the card shadows
+ *  (renderOrder -1) - like BEHIND_CARDS in cards3d. They write depth where they are not see-through, as the single
+ *  relief did. */
+const LAYER_BLEND = {
+  transparent: false, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, alphaTest: 0.02, depthTest: false, depthWrite: true,
+} as const;
+
+/** 8-bit disparity image -> floats 0..1 */
+function readDepth(img: HTMLImageElement): Depth {
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(img, 0, 0);
+  const px = g.getImageData(0, 0, c.width, c.height).data;
+  const data = new Float32Array(c.width * c.height);
+  for (let i = 0; i < data.length; i++) data[i] = px[i * 4] / 255;
+  return { data, w: c.width, h: c.height };
+}
+
+/** bilinear sample at u, v (0..1, v from the top) */
+function sampleDepth(d: Depth, u: number, v: number) {
+  const x = Math.min(d.w - 1.001, Math.max(0, u * (d.w - 1)));
+  const y = Math.min(d.h - 1.001, Math.max(0, v * (d.h - 1)));
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const i = y0 * d.w + x0;
+  return (d.data[i] * (1 - fx) + d.data[i + 1] * fx) * (1 - fy) + (d.data[i + d.w] * (1 - fx) + d.data[i + d.w + 1] * fx) * fy;
+}
+
 export class Stage {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -38,7 +71,9 @@ export class Stage {
   private bg?: THREE.Mesh;
   private bgAspect = 16 / 9;
   private bgW = 1; private bgH = 1;
-  private depth: { data: Float32Array; w: number; h: number } | null = null;
+  private depth: Depth | null = null;
+  /** option A test (?bg=layers): the painting as depth layers; while set, the single relief is hidden */
+  private layers: { mesh: THREE.Mesh; rect: [number, number, number, number]; depth: Depth }[] = [];
   /** camera pose override used by Travel; w = blend weight against the play pose */
   readonly travel = { pos: new THREE.Vector3(), look: new THREE.Vector3(), fov: FOV, w: 0 };
   readonly baseFov = FOV;
@@ -106,27 +141,11 @@ export class Stage {
     this.bgAspect = img.width / img.height;
     if (!this.bg) {
       const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
-      // the arrival footage (travel.ts) is mixed into the backdrop in screen space, so it sits behind
-      // everything else exactly like the painting does
-      mat.onBeforeCompile = sh => {
-        Object.assign(sh.uniforms, this.clipU);
-        sh.fragmentShader = sh.fragmentShader
-          .replace('#include <common>', `#include <common>
-uniform sampler2D uClip;
-uniform float uClipMix;
-uniform vec4 uClipRect;
-uniform vec3 uClipGain;
-uniform vec3 uClipOffs;`)
-          .replace('#include <map_fragment>', `#include <map_fragment>
-if (uClipMix > 0.0) {
-  vec2 cuv = clamp((gl_FragCoord.xy - uClipRect.xy) / uClipRect.zw, 0.0, 1.0);
-  vec3 v = clamp(texture2D(uClip, cuv).rgb * uClipGain + uClipOffs, 0.0, 1.0);   // graded to the painting
-  diffuseColor.rgb = mix(diffuseColor.rgb, pow(v, vec3(2.2)), uClipMix);          // sRGB -> linear
-}`);
-      };
+      this.clipShader(mat, false);
       this.bg = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, SEG_X, SEG_Y), mat);
       this.bg.renderOrder = -10;
       this.bg.frustumCulled = false;
+      this.bg.visible = this.layers.length === 0;
       this.scene.add(this.bg);
     } else {
       const m = this.bg.material as THREE.MeshBasicMaterial;
@@ -135,37 +154,83 @@ if (uClipMix > 0.0) {
     this.layout();
   }
 
+  /** The arrival footage (travel.ts) is mixed into the backdrop in screen space, so it sits behind everything
+   *  else exactly like the painting does. `premul`: the layer's colour is premultiplied by its alpha. */
+  private clipShader(mat: THREE.MeshBasicMaterial, premul: boolean) {
+    mat.onBeforeCompile = sh => {
+      Object.assign(sh.uniforms, this.clipU);
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+uniform sampler2D uClip;
+uniform float uClipMix;
+uniform vec4 uClipRect;
+uniform vec3 uClipGain;
+uniform vec3 uClipOffs;`)
+        .replace('#include <map_fragment>', `#include <map_fragment>
+if (uClipMix > 0.0) {
+  vec2 cuv = clamp((gl_FragCoord.xy - uClipRect.xy) / uClipRect.zw, 0.0, 1.0);
+  vec3 v = clamp(texture2D(uClip, cuv).rgb * uClipGain + uClipOffs, 0.0, 1.0);   // graded to the painting
+  diffuseColor.rgb = mix(diffuseColor.rgb, pow(v, vec3(2.2))${premul ? ' * diffuseColor.a' : ''}, uClipMix);          // sRGB -> linear
+}`);
+    };
+  }
+
   /** Depth map of the painting (8-bit disparity, 255 = near). Turns the backdrop into a relief. */
   setDepth(img: HTMLImageElement) {
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth; c.height = img.naturalHeight;
-    const g = c.getContext('2d', { willReadFrequently: true })!;
-    g.drawImage(img, 0, 0);
-    const px = g.getImageData(0, 0, c.width, c.height).data;
-    const data = new Float32Array(c.width * c.height);
-    for (let i = 0; i < data.length; i++) data[i] = px[i * 4] / 255;
-    this.depth = { data, w: c.width, h: c.height };
+    this.depth = readDepth(img);
+    this.layout();
+  }
+
+  /**
+   * Option A test (?bg=layers; user: "배경은 일단은 a로 시험해볼께"): the painting cut into depth layers - sky,
+   * far islands, floor, front clouds - each a relief of its own depth, with what the nearer layers hide painted in
+   * (made offline, see README-3D). A big camera move then shows real background behind an edge instead of the
+   * single relief stretching across it. At rest the stack reproduces the painting. Layer 0 must be opaque.
+   */
+  setLayers(list: BgLayer[]) {
+    for (const L of this.layers) {
+      this.scene.remove(L.mesh);
+      L.mesh.geometry.dispose();
+      const m = L.mesh.material as THREE.MeshBasicMaterial;
+      m.map?.dispose(); m.dispose();
+    }
+    this.layers = list.map((l, i) => {
+      const tex = new THREE.Texture(l.img);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      tex.premultiplyAlpha = i > 0;              // filtered edges stay clean whatever the browser keeps under alpha 0
+      tex.needsUpdate = true;
+      const [u0, v0, u1, v1] = l.rect;
+      const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, ...(i > 0 ? LAYER_BLEND : {}) });
+      this.clipShader(mat, i > 0);
+      const geo = new THREE.PlaneGeometry(1, 1, Math.max(8, Math.round(SEG_X * (u1 - u0))), Math.max(8, Math.round(SEG_Y * (v1 - v0))));
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = -14 + i;
+      mesh.frustumCulled = false;
+      mesh.name = `wm3d-bg-L${i}`;
+      this.scene.add(mesh);
+      return { mesh, rect: l.rect, depth: readDepth(l.depth) };
+    });
+    if (this.bg) this.bg.visible = this.layers.length === 0;
     this.layout();
   }
 
   /** Disparity (0 far .. 1 near) at painting coords u, v (v from the top). */
   private disp(u: number, v: number) {
-    const d = this.depth;
-    if (!d) return null;
-    const x = Math.min(d.w - 1.001, Math.max(0, u * (d.w - 1)));
-    const y = Math.min(d.h - 1.001, Math.max(0, v * (d.h - 1)));
-    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-    const i = y0 * d.w + x0;
-    return (d.data[i] * (1 - fx) + d.data[i + 1] * fx) * (1 - fy) + (d.data[i + d.w] * (1 - fx) + d.data[i + d.w + 1] * fx) * fy;
+    return this.depth ? sampleDepth(this.depth, u, v) : null;
+  }
+
+  /** z-distance from the base camera for a disparity (0 far .. 1 near). */
+  private distOf(dp: number) {
+    const tFar = 1 / (D_FAR * this.dist), sNear = 1 / (D_NEAR * this.dist) - tFar;
+    return 1 / (tFar + sNear * dp);
   }
 
   /** z-distance from the base camera for painting coords (u, v from top-left). */
   private distAt(u: number, v: number) {
     const dp = this.disp(u, v);
-    const D0 = this.dist - BG_Z;
-    if (dp === null) return D0;
-    const tFar = 1 / (D_FAR * this.dist), sNear = 1 / (D_NEAR * this.dist) - tFar;
-    return 1 / (tFar + sNear * dp);
+    if (dp === null) return this.dist - BG_Z;
+    return this.distOf(dp);
   }
 
   /** World point of painting coords on the relief (as seen from the base camera). */
@@ -189,6 +254,25 @@ if (uClipMix > 0.0) {
     }
     pos.needsUpdate = true;
     geo.computeBoundingSphere();
+  }
+
+  /** Each layer on its own relief: vertices on their base-camera rays (at rest the stack looks like the painting). */
+  private buildLayers() {
+    const D0 = this.dist - BG_Z;
+    for (const L of this.layers) {
+      const geo = L.mesh.geometry as THREE.BufferGeometry;
+      const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+      const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+      const [u0, v0, u1, v1] = L.rect;
+      for (let i = 0; i < pos.count; i++) {
+        const lu = uv.getX(i), lv = 1 - uv.getY(i);
+        const u = u0 + lu * (u1 - u0), v = v0 + lv * (v1 - v0);
+        const k = this.distOf(sampleDepth(L.depth, lu, lv)) / D0;
+        pos.setXYZ(i, (u - 0.5) * this.bgW * k, (0.5 - v) * this.bgH * k, this.dist - D0 * k);
+      }
+      pos.needsUpdate = true;
+      geo.computeBoundingSphere();
+    }
   }
 
   setQuality(q: Quality) {
@@ -223,13 +307,14 @@ if (uClipMix > 0.0) {
     this.overlayCam.lookAt(0, 0, 0);
     this.overlayCam.updateProjectionMatrix();
     // backdrop: object-fit cover at its reference depth, like the 2D game, plus a parallax margin
-    if (this.bg) {
+    if (this.bg || this.layers.length) {
       const k = (this.dist - BG_Z) / this.dist;
       const vw = W * k, vh = H * k;
       let w = vw, h = vw / this.bgAspect;
       if (h < vh) { h = vh; w = vh * this.bgAspect; }
       this.bgW = w * BG_MARGIN; this.bgH = h * BG_MARGIN;
       this.buildRelief();
+      this.buildLayers();
     }
     // key light from the top centre, in front. Left cards turn right and right cards turn left (mirrored yaw), so a
     // key off to the upper right (x = 0.45 W, as first set) lit the right row ~10% darker (grey-face test: 187 vs

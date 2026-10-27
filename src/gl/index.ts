@@ -458,6 +458,7 @@ function frame(game: Phaser.Game) {
   const pxPerUnit = stage.renderer.domElement.height / 2 / Math.tan((stage.camera.fov * Math.PI) / 360);
   state.zone!.update(t, dt, s.zoneGfx?.alpha ?? 1, pxPerUnit);
   state.travel!.update(dt);
+  if (DEMO_FLY && !state.travel!.active) flyDemo(stage, t);
   if (state.glee) {
     placeGlee(s);
     state.glee.setPortal(s.cx, s.cy, s.zoneR);
@@ -627,6 +628,49 @@ function listenPointer() {
   addEventListener('blur', () => { ptr.inside = false; });
 }
 
+/**
+ * Backdrop test flight (?fly=1, with or without ?bg=layers): an 11 s camera loop - hold, left, right, then into the
+ * world toward the gate and back. Compare ?fly=1 (one painting on a relief) with ?bg=layers&fly=1 (option A).
+ * Depth: 35% of the way to the gate - the test flight showed the painting holding up to ~37% and smearing past ~45%.
+ * Pauses during the real flights between rounds. Game input is not re-aimed while the camera is away.
+ */
+const DEMO_FLY = new URLSearchParams(location.search).get('fly') === '1';
+//                t (s), x, y (x stage.dist), depth (share of the way to the gate), fov
+const FLY_KEYS = [[0, 0, 0, 0, 30], [1.2, 0, 0, 0, 30], [3, -0.22, 0.03, 0.02, 30], [5, 0.22, 0.03, 0.02, 30],
+  [6.2, 0, 0, 0.06, 30.5], [8.2, 0, -0.01, 0.35, 32], [9, 0, -0.01, 0.36, 32], [11, 0, 0, 0, 30]];
+function flyDemo(stage: Stage, t: number) {
+  const K = FLY_KEYS, T = K[K.length - 1][0], u = t % T;
+  let i = 0;
+  while (i < K.length - 2 && K[i + 1][0] <= u) i++;
+  const h = K[i + 1][0] - K[i][0], f = (u - K[i][0]) / h;
+  const h00 = 2 * f ** 3 - 3 * f ** 2 + 1, h10 = f ** 3 - 2 * f ** 2 + f, h01 = -2 * f ** 3 + 3 * f ** 2, h11 = f ** 3 - f ** 2;
+  // cubic Hermite, Catmull-Rom tangents (time-aware), at rest at both ends of the loop and during the hold
+  const tan = (k: number, j: number) => (k <= 1 || k >= K.length - 1 ? 0 : (K[k + 1][j] - K[k - 1][j]) / (K[k + 1][0] - K[k - 1][0]));
+  const at = (j: number) => h00 * K[i][j] + h10 * h * tan(i, j) + h01 * K[i + 1][j] + h11 * h * tan(i + 1, j);
+  const d = stage.dist, gate = stage.paintingPoint(GATE_UV.u, GATE_UV.v);
+  const tr = stage.travel;
+  tr.pos.set(at(1) * d, at(2) * d, d + at(3) * (gate.z - d));
+  tr.look.set(0, gate.y, gate.z);
+  tr.fov = at(4);
+  tr.w = 1;
+}
+
+/** Option A test (?bg=layers): the backdrop as depth layers (stage.setLayers); the single relief stays until they load. */
+async function loadBgLayers(stage: Stage) {
+  try {
+    const meta = await (await fetch('./gl/layers/layers.json')).json();
+    const load = (src: string) => new Promise<HTMLImageElement>((ok, no) => {
+      const im = new Image();
+      im.onload = () => ok(im); im.onerror = no;
+      im.src = `./gl/layers/${src}`;
+    });
+    const list = await Promise.all(meta.layers.map(async (l: Any) => ({ img: await load(l.img), depth: await load(l.depth), rect: l.rect })));
+    if (state.stage === stage) stage.setLayers(list);
+  } catch (err) {
+    console.warn('[wm3d] backdrop layers', err);
+  }
+}
+
 export function start3D(game: Phaser.Game) {
   const { mode, forced } = pickMode();
   state.game = game;
@@ -670,6 +714,7 @@ export function start3D(game: Phaser.Game) {
       const depth = new Image();
       depth.onload = () => state.stage?.setDepth(depth);
       depth.src = './gl/bg_depth.png';
+      if (qs.get('bg') === 'layers') loadBgLayers(stage);
       // warm the HTTP cache with every card face, so a new round's faces are ready mid-flight
       setTimeout(() => {
         for (const k of Object.keys(CARD_FACES)) { const im = new Image(); im.src = `./gl/cards/${k}.webp`; }
