@@ -96,6 +96,19 @@ for a, b, c in pairs:
     LINES[f'r_{c}'] = f'{cap(c)}!'
     LINES[f'hint_{c}'] = f'Look! {cap(say(a))}... and {say(b)}!'
 
+# Spoken differently from the written line, for clarity only (the line's text stays as written). With the plain
+# text Whisper (medium) heard 'Cellball', 'Self Lake', 'smell and ball make, smell ball', 'I am ball make' and
+# 'Melt is right'; with these, the intended words. A phonics tutor has to say the word unmistakably.
+SPOKEN = {
+    'r_snowball': 'Snow-ball!',
+    'r_snowflake': 'Snow-flake!',
+    'mk_snowball': 'Snow... and ball make... snow-ball!',
+    'mk_eyeball': 'Eye, and ball, make... eyeball!',
+    'ok_note': 'Note, is right!',
+}
+assert set(SPOKEN) <= set(LINES), set(SPOKEN) - set(LINES)
+spoken = lambda i, t: SPOKEN.get(i, t)
+
 FR = int(SR * .01)            # 10 ms frames
 MOUTH_MS = 60
 
@@ -107,7 +120,7 @@ def key(i, t):
 async def fetch_all():
     import edge_tts
     CACHE.mkdir(parents=True, exist_ok=True)
-    todo = [(i, t) for i, t in LINES.items() if not (CACHE / f'{key(i, t)}.mp3').exists()]
+    todo = [(i, spoken(i, t)) for i, t in LINES.items() if not (CACHE / f'{key(i, spoken(i, t))}.mp3').exists()]
 
     async def one(i, t):
         for attempt in range(5):
@@ -161,7 +174,8 @@ for f in OUT.glob('*.mp3'):
     f.unlink()
 lines, total = {}, 0
 for i, t in LINES.items():
-    raw = CACHE / f'{key(i, t)}.mp3'
+    sk = key(i, spoken(i, t))                    # cache entry of what is actually spoken
+    raw = CACHE / f'{sk}.mp3'
     _, act = speech(decode(raw))
     dst = OUT / f'{i}.mp3'
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(raw), '-t', f'{(act[-1] + 1) * FR / SR + .12:.3f}',
@@ -178,7 +192,7 @@ for i, t in LINES.items():
     m = [seg[k:k + step].mean() for k in range(0, len(seg), step)]
     top = max(m) if m else 1
     mouth = ''.join(str(min(9, int(round(9 * (v / top) ** .6)))) if v > top * .12 else '0' for v in m)
-    marks = json.loads((CACHE / f'{key(i, t)}.json').read_text()) if (CACHE / f'{key(i, t)}.json').exists() else []
+    marks = json.loads((CACHE / f'{sk}.json').read_text()) if (CACHE / f'{sk}.json').exists() else []
     lines[i] = {'text': t, 'start': round(start, 3), 'dur': round(end - start, 3), 'gain': round(float(g), 3), 'mouth': mouth,
                 'words': [[w, round(max(0., a - start), 3), round(max(0., b - start), 3)] for w, a, b in marks]}
     total += dst.stat().st_size
