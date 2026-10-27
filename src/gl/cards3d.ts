@@ -14,6 +14,7 @@ import { cardShadowTexture, dotTexture, hazeTexture } from './textures';
 const FW = 184;
 const FH = FW / FACE_ASPECT;          // 245
 const D2R = Math.PI / 180;
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 /** In-plane tilt of a 3D card. The 2D layout tilts the BOTTOM slots off the pattern of the others (left -12 deg vs
  *  -8 / -4, right +8 vs +10 / +4: GameScene leftAngle/rightAngle), which read as a different angle in 3D (user:
@@ -25,10 +26,10 @@ function slotRotation(angleDeg: number, rotation: number, side: 'left' | 'right'
   return rotation;
 }
 /**
- * Card pose, measured against the line of sight from the resting camera (not world axes), so every
- * card shows the same pose wherever it sits on screen - like the art, where all left cards show the
- * same left wall.  yaw: turn toward the screen centre; pitch: top leans back (bottom wall shows);
- * roll: share of the 2D layout's tilt, applied in SCREEN space like the 2D game rotates its images.
+ * Card pose = how the card would look at the screen centre; wherever it sits, each card is turned so its face
+ * projects to that same outline (matchOutline), so every card shows the same pose - like the art, where all
+ * left cards show the same left wall.  yaw: turn toward the screen centre; pitch: top leans back (bottom wall
+ * shows); roll: share of the 2D layout's tilt, applied in SCREEN space like the 2D game rotates its images.
  * Test hook: ?pose=yaw,pitch,roll  and  WM3D.cards.pose (live).
  */
 export const pose = (() => {
@@ -180,7 +181,13 @@ export class Cards3D {
   readonly pose = pose;
   private eul = new THREE.Euler(0, 0, 0, 'YXZ');
   private qBase = new THREE.Quaternion();
+  private qView = new THREE.Quaternion();
+  private qRef = new THREE.Quaternion();
   private qRoll = new THREE.Quaternion();
+  private r1 = new THREE.Vector3();
+  private r2 = new THREE.Vector3();
+  private r3 = new THREE.Vector3();
+  private m4 = new THREE.Matrix4();
   private axis = new THREE.Vector3();
   private yAxis = new THREE.Vector3(0, 1, 0);
 
@@ -362,13 +369,24 @@ export class Cards3D {
     if (pose.world && !debug.front) {
       c.spin.rotation.set(PITCH_W + (relX + pose.pitch * D2R), sign * YAW_W + (relY - sign * pose.yaw * D2R), roll, 'YXZ');
     } else {
-      // line of sight from the resting camera (0, 0, D): parallax orbits must not re-aim the cards
-      const viewY = Math.atan2(-P.x, D - P.z);
-      const viewX = Math.atan2(P.y, Math.hypot(P.x, D - P.z));
-      this.qBase.setFromEuler(this.eul.set(viewX + relX, viewY + relY, 0, 'YXZ'));
-      this.axis.set(-P.x, -P.y, D - P.z).normalize();
-      this.qRoll.setFromAxisAngle(this.axis, roll);
-      c.spin.quaternion.multiplyQuaternions(this.qRoll, this.qBase);
+      // seen from the resting camera (0, 0, D): parallax orbits must not re-aim the cards
+      const Z = D - P.z;
+      // the look at the screen centre: the pose, then the 2D tilt in screen space ...
+      this.qRef.setFromEuler(this.eul.set(relX, relY, 0, 'YXZ'));
+      this.qRoll.setFromAxisAngle(Z_AXIS, roll);
+      this.qRef.premultiply(this.qRoll);
+      // ... and the turn that gives the same outline here. The first version added the view angles to the pose
+      // angles (one Euler): each card pitched about its own 28-deg-turned axis, so the bottom row leaned ~10 deg
+      // more than the top row whatever the slot tilt (user: "오른쪽 맨 밑에 카드도 각도가 위에 카드들이랑 안맞는데");
+      // facing the line of sight still left ~4 deg of perspective shear between the rows (card_outline.py)
+      if (!this.matchOutline(this.qRef, P.x / Z, P.y / Z, c.spin.quaternion)) {
+        const viewY = Math.atan2(-P.x, Z), viewX = Math.atan2(P.y, Math.hypot(P.x, Z));
+        this.qView.setFromEuler(this.eul.set(viewX, viewY, 0, 'YXZ'));
+        this.qBase.setFromEuler(this.eul.set(relX, relY, 0, 'YXZ')).premultiply(this.qView);
+        this.axis.set(-P.x, -P.y, Z).normalize();
+        this.qRoll.setFromAxisAngle(this.axis, roll);
+        c.spin.quaternion.multiplyQuaternions(this.qRoll, this.qBase);
+      }
     }
     const sc = (card.scaleX + card.scaleY) / 2 || 1;
     c.root.scale.set(card.scaleX, card.scaleY, sc);
@@ -395,6 +413,43 @@ export class Cards3D {
         });
       }
     }
+  }
+
+  /**
+   * The rotation whose face, seen from the resting camera at p = (x, y) / depth, has the outline `ref` has at the
+   * screen centre (up to size). A face axis r projects along (r.x + px r.z, r.y + py r.z), so solve
+   * r + p r.z = s * ref (screen part) for both axes with |r1| = |r2| = 1 and r1 . r2 = 0 (Newton on s, r1.z, r2.z,
+   * started from the centre solution). False if it does not settle; the caller then faces the line of sight.
+   */
+  private matchOutline(ref: THREE.Quaternion, px: number, py: number, out: THREE.Quaternion) {
+    const e1 = this.r1.set(1, 0, 0).applyQuaternion(ref), e2 = this.r2.set(0, 1, 0).applyQuaternion(ref);
+    const ax = e1.x, ay = e1.y, bx = e2.x, by = e2.y;
+    let s = 1, t1 = e1.z, t2 = e2.z, ok = false;
+    for (let it = 0; it < 16; it++) {
+      const x0 = s * ax - px * t1, x1 = s * ay - py * t1;
+      const y0 = s * bx - px * t2, y1 = s * by - py * t2;
+      const F1 = x0 * x0 + x1 * x1 + t1 * t1 - 1, F2 = y0 * y0 + y1 * y1 + t2 * t2 - 1, F3 = x0 * y0 + x1 * y1 + t1 * t2;
+      if (Math.abs(F1) + Math.abs(F2) + Math.abs(F3) < 1e-10) { ok = true; break; }
+      const q1 = t1 - px * x0 - py * x1, q2 = t2 - px * y0 - py * y1;      // r1 . (-p, 1), r2 . (-p, 1)
+      // Jacobian, columns (s, t1, t2): [[a11, a12, 0], [a21, 0, a23], [a31, a32, a33]]; Cramer for J d = -F
+      const a11 = 2 * (ax * x0 + ay * x1), a12 = 2 * q1;
+      const a21 = 2 * (bx * y0 + by * y1), a23 = 2 * q2;
+      const a31 = ax * y0 + ay * y1 + bx * x0 + by * x1, a32 = q2, a33 = q1;
+      const det = -a11 * a23 * a32 - a12 * (a21 * a33 - a23 * a31);
+      if (!(Math.abs(det) > 1e-12)) return false;
+      const b1 = -F1, b2 = -F2, b3 = -F3;
+      s += (-b1 * a23 * a32 - a12 * (b2 * a33 - a23 * b3)) / det;
+      t1 += (a11 * (b2 * a33 - a23 * b3) - b1 * (a21 * a33 - a23 * a31)) / det;
+      t2 += (-a11 * b2 * a32 - a12 * (a21 * b3 - b2 * a31) + b1 * a21 * a32) / det;
+    }
+    if (!ok || !(s > 0)) return false;
+    const r1 = this.r1.set(s * ax - px * t1, s * ay - py * t1, t1).normalize();
+    const r2 = this.r2.set(s * bx - px * t2, s * by - py * t2, t2);
+    r2.addScaledVector(r1, -r2.dot(r1)).normalize();
+    const r3 = this.r3.crossVectors(r1, r2);
+    if (r3.z - px * r3.x - py * r3.y <= 0) return false;            // the face must still look at the camera
+    out.setFromRotationMatrix(this.m4.makeBasis(r1, r2, r3));
+    return true;
   }
 
   // Out of the gate: a bezier arc toward the viewer, landing on the slot, with one flip.
