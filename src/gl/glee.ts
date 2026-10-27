@@ -406,7 +406,8 @@ const puffTex = () => canvasTex((g, s) => {
   gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.4, 'rgba(246,238,255,.85)'); gr.addColorStop(0.75, 'rgba(196,170,255,.45)'); gr.addColorStop(1, 'rgba(170,140,255,0)');
   g.fillStyle = gr; g.fillRect(0, 0, s, s);
 }, 64);
-/** listening: a pink ear with sound waves coming in from the left - no badge behind it, the scene shows
+/** listening: a mint ear (matches her mint lower body; user's pick from the ear mock-ups - yellow got lost on the
+ *  yellow path behind it) with sound waves coming in from the left - no badge behind it, the scene shows
  *  through (user: "귀 나오는 배경 투명하게"). A thin white rim and a soft shadow keep it readable on the backdrop. */
 const earTex = () => canvasTex((g, s) => {
   const cx = s * 0.6, cy = s * 0.5, r = s * 0.24;                   // the ear itself is the icon now: a bit bigger
@@ -432,8 +433,8 @@ const earTex = () => canvasTex((g, s) => {
   for (let i = 0; i < 2; i++) { wave(i); g.lineWidth = line + rim; g.stroke(); }
   g.restore();
   ear();
-  g.fillStyle = '#ffc6de'; g.fill();
-  g.lineWidth = line * 1.1; g.strokeStyle = '#f2479a'; g.stroke();
+  g.fillStyle = '#c9f8ea'; g.fill();
+  g.lineWidth = line * 1.1; g.strokeStyle = '#14b48e'; g.stroke();
   g.beginPath();                                                     // inner curl
   g.moveTo(cx - r * 0.25, cy + r * 0.25);
   g.bezierCurveTo(cx - r * 0.45, cy - r * 0.55, cx + r * 0.55, cy - r * 0.7, cx + r * 0.42, cy - r * 0.05);
@@ -442,7 +443,7 @@ const earTex = () => canvasTex((g, s) => {
   for (let i = 0; i < 2; i++) {                                      // sound waves
     g.globalAlpha = 1 - i * 0.25;
     wave(i);
-    g.lineWidth = line; g.strokeStyle = '#f2479a'; g.stroke();
+    g.lineWidth = line; g.strokeStyle = '#14b48e'; g.stroke();
   }
   g.globalAlpha = 1;
 }, 192);
