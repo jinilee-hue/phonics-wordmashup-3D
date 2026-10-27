@@ -33,7 +33,7 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
     - 음성: `tools/build_glee_voice.py`(edge-tts `en-US-AnaNeural`, 시제품용) → `public/gl/voice/*.mp3`, `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다.
 - 배경 깊이: `tools/build_depth.py`가 배경 그림의 깊이 지도(Depth Anything V2 Small, 로컬 CPU)를 만들어 `public/gl/bg_depth.png`에 저장 → 배경이 입체 부조가 되어 카메라가 움직이면 시차가 생긴다(정지 화면은 원본과 똑같다).
   - 실행: `uv run --with torch --with transformers --with pillow --with numpy python tools/build_depth.py`
-- 인트로 영상(`Word Mashup/Word Mashup.mp4`): 오른쪽 아래 Gemini(Veo) 반짝이 마크를 지운 판. 마크가 반투명하게 섞인 식을 거꾸로 풀어 원래 화면을 되살렸다(지우개로 칠한 것이 아님). 마크 모양은 GeminiWatermarkTool(MIT, allenk)의 보정 마스크, 세기는 프레임마다 가장자리가 사라지도록 맞춤. 마크 밖 화면과 소리는 그대로(재인코딩만). 마크가 있던 원래 영상은 git 기록(`a489ef7` 이전)과 원본 저장소에 있다.
+- 인트로 영상(`Word Mashup/Word Mashup.mp4`): 오른쪽 아래 Gemini(Veo) 반짝이 마크를 지운 판. 마크가 반투명하게 섞인 식을 거꾸로 풀어 원래 화면을 되살렸다(지우개로 칠한 것이 아님). 마크 모양은 GeminiWatermarkTool(MIT, allenk)의 보정 마스크에서 시작해, 이 영상의 평평한 장면에서 잰 값으로 고쳤다(영상 마크는 가운데가 테두리보다 15% 옅다). 안쪽 세기는 프레임마다 둘레 밝기에 맞추고, 별 테두리 2~3px에 남는 약한 계단만 지운 뒤 바깥에서 다시 이어 붙였다(Poisson). 테두리에 남는 1~2px 점도 지운다. 만드는 스크립트: 세션 scratch `wm/wmk/veo_v7.py`. 마크 밖 화면과 소리는 그대로(재인코딩만). 마크가 있던 원래 영상은 git 기록(`a489ef7` 이전)과 원본 저장소에 있다.
 - 카드 앞면: `tools/unwarp_cards.py`가 원본 카드 그림(기울기·두께가 그려진 PNG)에서 앞면만 찾아 정면으로 편다 → `public/gl/cards/*.webp`, `src/gl/cardFaces.ts`.
   - 실행: `uv run --with pillow --with numpy python tools/unwarp_cards.py [--debug DIR]`
   - 텍스처는 불투명: 모양은 3D 앞면 도형이 자르고, 가장자리 5px은 안쪽 색으로 다시 채운다(벽색·번짐 제거). 실행하면 그림 모서리 반지름 측정값도 출력한다.
