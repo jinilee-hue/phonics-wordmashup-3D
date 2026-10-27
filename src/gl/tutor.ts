@@ -89,7 +89,8 @@ class Voice {
   load(id: string) {
     let p = this.bufs.get(id);
     if (!p) {
-      p = fetch(`./gl/voice/${id}.mp3`)
+      // ?v=<voice>: a new voice gets new URLs, so no browser plays a cached clip of the old one (Pages caches 10 min)
+      p = fetch(`./gl/voice/${id}.mp3?v=${GLEE_VOICE.voice}`)
         .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${id}: ${r.status}`))))
         .then(b => this.context()!.decodeAudioData(b))
         .catch(err => { console.warn('[tutor] voice', err); return null; });
