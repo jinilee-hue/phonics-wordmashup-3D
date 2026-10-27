@@ -22,15 +22,18 @@ const SEG_X = 160, SEG_Y = 90;
 export const GATE_UV = { u: 0.5, v: 0.5 };
 
 type Depth = { data: Float32Array; w: number; h: number };
-/** One cut of the painting for the layered backdrop: RGBA image (premultiplied on upload), its own 8-bit disparity
- *  (255 = near) and where it sits in the painting (u0, v0, u1, v1; v from the top). */
+/** One cut of the painting for the layered backdrop: RGBA image (straight alpha; the colours under the edges are
+ *  real painting / fill colours), its own 8-bit disparity (255 = near) and where it sits in the painting
+ *  (u0, v0, u1, v1; v from the top). */
 export type BgLayer = { img: HTMLImageElement; depth: HTMLImageElement; rect: [number, number, number, number] };
-/** Layers past the first: blended (premultiplied) but drawn in the opaque pass, in order, before the card shadows
+/** Layers past the first: blended (straight alpha) but drawn in the opaque pass, in order, before the card shadows
  *  (renderOrder -1) - like BEHIND_CARDS in cards3d. They write depth where they are not see-through, as the single
- *  relief did. */
+ *  relief did. Not premultiplied: with premultiplyAlpha + One/OneMinusSrcAlpha the browser handed the WebP over
+ *  un-premultiplied, every soft cut edge added its colour twice and drew a bright cyan line around the clouds,
+ *  balloons and trees (user: "배경에 라인들이 생긴건 뭐야?"; 0.16% of the frame -> 0, rest PSNR 39.2 -> 42.6 dB). */
 const LAYER_BLEND = {
   transparent: false, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
-  blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, alphaTest: 0.02, depthTest: false, depthWrite: true,
+  blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor, alphaTest: 0.02, depthTest: false, depthWrite: true,
 } as const;
 
 /** 8-bit disparity image -> floats 0..1 */
@@ -141,7 +144,7 @@ export class Stage {
     this.bgAspect = img.width / img.height;
     if (!this.bg) {
       const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
-      this.clipShader(mat, false);
+      this.clipShader(mat);
       this.bg = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, SEG_X, SEG_Y), mat);
       this.bg.renderOrder = -10;
       this.bg.frustumCulled = false;
@@ -155,8 +158,8 @@ export class Stage {
   }
 
   /** The arrival footage (travel.ts) is mixed into the backdrop in screen space, so it sits behind everything
-   *  else exactly like the painting does. `premul`: the layer's colour is premultiplied by its alpha. */
-  private clipShader(mat: THREE.MeshBasicMaterial, premul: boolean) {
+   *  else exactly like the painting does. */
+  private clipShader(mat: THREE.MeshBasicMaterial) {
     mat.onBeforeCompile = sh => {
       Object.assign(sh.uniforms, this.clipU);
       sh.fragmentShader = sh.fragmentShader
@@ -170,7 +173,7 @@ uniform vec3 uClipOffs;`)
 if (uClipMix > 0.0) {
   vec2 cuv = clamp((gl_FragCoord.xy - uClipRect.xy) / uClipRect.zw, 0.0, 1.0);
   vec3 v = clamp(texture2D(uClip, cuv).rgb * uClipGain + uClipOffs, 0.0, 1.0);   // graded to the painting
-  diffuseColor.rgb = mix(diffuseColor.rgb, pow(v, vec3(2.2))${premul ? ' * diffuseColor.a' : ''}, uClipMix);          // sRGB -> linear
+  diffuseColor.rgb = mix(diffuseColor.rgb, pow(v, vec3(2.2)), uClipMix);          // sRGB -> linear
 }`);
     };
   }
@@ -198,11 +201,10 @@ if (uClipMix > 0.0) {
       const tex = new THREE.Texture(l.img);
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = 4;
-      tex.premultiplyAlpha = i > 0;              // filtered edges stay clean whatever the browser keeps under alpha 0
       tex.needsUpdate = true;
       const [u0, v0, u1, v1] = l.rect;
       const mat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, ...(i > 0 ? LAYER_BLEND : {}) });
-      this.clipShader(mat, i > 0);
+      this.clipShader(mat);
       const geo = new THREE.PlaneGeometry(1, 1, Math.max(8, Math.round(SEG_X * (u1 - u0))), Math.max(8, Math.round(SEG_Y * (v1 - v0))));
       const mesh = new THREE.Mesh(geo, mat);
       mesh.renderOrder = -14 + i;
