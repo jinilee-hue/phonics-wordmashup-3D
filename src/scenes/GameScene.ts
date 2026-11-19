@@ -505,7 +505,7 @@ export class GameScene extends Phaser.Scene {
     const s = Math.min(GW / 1280, GH / 720);
     const sz = (f: number) => Math.round(f * s);
 
-    const panelW = sz(480), panelH = sz(320);
+    const panelW = sz(480), panelH = sz(400);
     const panelX = GW / 2, panelY = GH / 2;
 
     const container = this.add.container(panelX, panelY).setDepth(200);
@@ -573,8 +573,38 @@ export class GameScene extends Phaser.Scene {
       container.add([label, trackBg, knobGfx, hit]);
     };
 
-    makeToggle('배경음악 (BGM)', -sz(30), () => this.bgmOn, () => { this.bgmOn = !this.bgmOn; gameAudio.unlock(); gameAudio.startBgm(); gameAudio.setBgmEnabled(this.bgmOn); });
-    makeToggle('효과음 (SFX)',   sz(40),  () => this.sfxOn, () => { this.sfxOn = !this.sfxOn; gameAudio.sfxOn = this.sfxOn; });
+    makeToggle('배경음악 (BGM)', -sz(60), () => this.bgmOn, () => { this.bgmOn = !this.bgmOn; gameAudio.unlock(); gameAudio.startBgm(); gameAudio.setBgmEnabled(this.bgmOn); });
+    makeToggle('효과음 (SFX)',   sz(8),   () => this.sfxOn, () => { this.sfxOn = !this.sfxOn; gameAudio.sfxOn = this.sfxOn; });
+    // phonics-api key (phonics-kit rule): a teacher enters it once per device; the pill shows whether the company server
+    // hears the words (green 연결됨) or the browser does (키 입력) — gl/apiSR.ts
+    const PA = (window as unknown as { PhonicsAPI?: PhonicsAPIType }).PhonicsAPI;
+    if (PA) {
+      const rowY = sz(76);
+      const keyLabel = this.add.text(-panelW / 2 + sz(40), rowY, '발음 인식 서버 키', {
+        fontFamily: '"Noto Sans KR", "Baloo 2"', fontSize: `${sz(22)}px`, color: '#CCBBFF',
+      }).setOrigin(0, 0.5);
+      const pW = sz(124), pH = sz(44), pR = panelW / 2 - sz(12), pL = pR - pW;
+      const pill = this.add.graphics();
+      const pillText = this.add.text(pL + sz(34), rowY, '', {
+        fontFamily: '"Noto Sans KR", "Baloo 2"', fontSize: `${sz(19)}px`, color: '#FFFFFF', fontStyle: 'bold',
+      }).setOrigin(0, 0.5);
+      const paintKey = () => {
+        const on = PA.status() === 'on';
+        pill.clear();
+        pill.fillStyle(on ? 0x2e7d5b : 0x3a3560, 1);
+        pill.fillRoundedRect(pL, rowY - pH / 2, pW, pH, pH / 2);
+        pill.fillStyle(on ? 0x5ff0a8 : 0x9a93c0, 1);
+        pill.fillCircle(pL + sz(20), rowY, sz(7));
+        pillText.setText(on ? '연결됨' : '키 입력');
+      };
+      paintKey();
+      window.addEventListener('phonicsapi:status', paintKey);
+      const keyHit = this.add.graphics().setAlpha(0.001);
+      keyHit.fillRect(pL, rowY - pH / 2, pW, pH);
+      keyHit.setInteractive({ hitArea: new Phaser.Geom.Rectangle(pL, rowY - pH / 2, pW, pH), hitAreaCallback: Phaser.Geom.Rectangle.Contains, useHandCursor: true });
+      keyHit.on('pointerdown', () => { void PA.keyDialog().then(paintKey); });
+      container.add([keyLabel, pill, pillText, keyHit]);
+    }
 
     // Close button
     const closeBtnY = panelH / 2 - sz(44);

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import './gl/apiSR';   // SpeechRecognition on phonics-api when this device has a key (phonics-kit rule)
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { gameAudio } from './audio';

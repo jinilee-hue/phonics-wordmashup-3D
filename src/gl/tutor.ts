@@ -200,7 +200,7 @@ class Ears {
       };
       rec.onend = () => finish(last);
       const timer = setTimeout(() => { try { rec.stop(); } catch { /* ended */ } }, ms);
-      const hard = setTimeout(() => finish(last), ms + 1500);
+      const hard = setTimeout(() => finish(last), ms + (rec.phonics ? 7000 : 1500));   // phonics-api: the text comes after the recording (gl/apiSR.ts)
       try { rec.start(); } catch { finish(null); }
     });
   }
