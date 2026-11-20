@@ -11,6 +11,8 @@
  * official "meat" for a released t ("t eu"). judge() instead compares the heard phonemes with the expected phonemes of
  * every word on screen. Any failure (no key, offline, 401/403, busy, timeout) returns ok:false — the game then uses its
  * on-device recogniser.
+ *
+ * ?debug in a game's address shows every try on screen (what was asked, expected, heard, verdict, time, recording level).
  */
 (function (root) {
   'use strict';
@@ -110,7 +112,8 @@
   const REASON = { 400: 'bad', 401: 'nokey', 403: 'suspended', 404: 'bad', 413: 'toolong', 422: 'bad', 503: 'busy' };
   async function post(path, form, ms, asBlob) {
     const st = PA.status();
-    if (st === 'nokey' || st === 'down' || st === 'off') return { ok: false, reason: st };
+    if (PA.debug) await dbgCall(path, form);
+    if (st === 'nokey' || st === 'down' || st === 'off') return dbgDone({ ok: false, reason: st });
     const t0 = Date.now();
     try {
       const r = await fetchT(PA.base + path, { method: 'POST', headers: authHeaders(), body: form }, ms || PA.timeoutMs);
@@ -118,13 +121,13 @@
         if (r.status === 401 || r.status === 403) { keyOk = false; emit(); }
         if (r.status === 503 || r.status >= 500) { restUntil = Date.now() + 15000; emit(); }
         let detail = ''; try { detail = (await r.json()).detail; } catch (e) { /* not json */ }
-        return { ok: false, status: r.status, reason: REASON[r.status] || 'server', detail, ms: Date.now() - t0 };
+        return dbgDone({ ok: false, status: r.status, reason: REASON[r.status] || 'server', detail, ms: Date.now() - t0 });
       }
       if (keyOk === null && PA.getKey()) { keyOk = true; emit(); }
-      return { ok: true, status: r.status, data: asBlob ? await r.blob() : await r.json(), ms: Date.now() - t0 };
+      return dbgDone({ ok: true, status: r.status, data: asBlob ? await r.blob() : await r.json(), ms: Date.now() - t0 });
     } catch (e) {
       restUntil = Date.now() + 60000; healthAt = 0; emit();   // offline or hanging: the device judges for a minute
-      return { ok: false, reason: e && e.name === 'AbortError' ? 'timeout' : 'network', ms: Date.now() - t0 };
+      return dbgDone({ ok: false, reason: e && e.name === 'AbortError' ? 'timeout' : 'network', ms: Date.now() - t0 });
     }
   }
   const form = (fields, wav) => { const f = new FormData(); if (wav) f.append('audio', wav, 'rec.wav'); for (const k in fields) if (fields[k] != null) f.append(k, fields[k]); return f; };
@@ -158,7 +161,12 @@
   const VOWELS = new Set('aa ae ah ao aw ay eh er ey ih iy ow oy uh uw'.split(' '));
   // sounds a 5-year-old (and the recogniser) easily swaps: cost 0.4 instead of 1. m/n: the server hears a child voice's
   // m as n (en-US-Ana "map" -> "n ae p", mirror, mitt, moon) — near, so a rhyme like "nap" doesn't beat "map"
-  const NEAR = new Set(['ih iy', 'ih eh', 'iy ey', 'ah aa', 'ah ao', 'aa ao', 'ah uh', 'uw uh', 'eh ae', 'eh ey', 'ow ao', 'er r', 'n ng', 'm n']
+  // g/k, b/p, d/t: a word's end stop loses its voice in a child's or a Korean speaker's mouth ("mug" -> "m aa k", which
+  // then sat nearer to "mop" — Eye Catch, user: "머그도 잘 안되는데"); 12 words x 8 voices: right 89.6 -> 90.6 %, others
+  // passed unchanged at 5.2 %. m/b, n/d: a Korean word-initial m / n comes out half like b / d ("mitt" -> "bit"); p/m: a
+  // Korean unreleased end p is heard as m ("맵" -> "m ae m", which sat nearer to "man")
+  const NEAR = new Set(['ih iy', 'ih eh', 'iy ey', 'ah aa', 'ah ao', 'aa ao', 'ah uh', 'uw uh', 'eh ae', 'eh ey', 'ow ao', 'er r', 'n ng', 'm n',
+    'g k', 'b p', 'd t', 'm b', 'n d', 'p m']
     .flatMap(s => { const [a, b] = s.split(' '); return [a + ' ' + b, b + ' ' + a]; }));
   // a different vowel changes the word (meat / mop) more than a misheard end consonant (map / "mak"): 1.3
   const sub = (a, b) => a === b ? 0 : NEAR.has(a + ' ' + b) ? 0.4 : VOWELS.has(a) && VOWELS.has(b) ? 1.3 : 1;
@@ -194,19 +202,78 @@
   PA.judge = function (data, target, words, table) {
     const heard = PA.norm(data && data.detected_phonemes);
     const res = { verdict: 'unclear', heard: heard.join(' '), best: null, d: {}, rel: Infinity };
-    if (!heard.length) { res.verdict = 'silence'; return res; }
+    if (!heard.length) { res.verdict = 'silence'; return dbgJudge(res, data, target, table); }
     const cand = [...new Set([target, ...(words || [])])].filter(w => table[w] && table[w].length);
     for (const w of cand) res.d[w] = PA.distance(heard, PA.norm(table[w]));
     const others = cand.filter(w => w !== target).sort((a, b) => res.d[a] - res.d[b]);
     const dt = res.d[target], rival = others[0], dr = rival == null ? Infinity : res.d[rival];
     res.best = dt <= dr ? target : rival;
-    if (dt == null || (data.confidence != null && data.confidence < 0.4)) return res;
+    if (dt == null || (data.confidence != null && data.confidence < 0.4)) return dbgJudge(res, data, target, table);
     const len = PA.norm(table[target]).length || 1;
     res.rel = Math.round(dt / len * 100) / 100;   // how far from the target, per sound (a game may call ≤ 0.7 "a try at it")
     if (dt / len <= 0.4 && dt - dr < 0.6) res.verdict = 'ok';
     else if (dr <= 0.5 && dt - dr >= 0.6) res.verdict = 'wrong';
-    return res;
+    return dbgJudge(res, data, target, table);
   };
+
+  // ---------- ?debug: what the server heard, on screen (user 2026-11-20: "전체적으로 음성 인식이 잘 안되는거 같은데") ----------
+  // Add ?debug to a game's address: a small panel (bottom left, never takes a tap) lists the last 6 tries — the word
+  // asked for, its expected sounds, what the server heard, the verdict, confidence, time, and the recording's length and
+  // loudness — or why the server wasn't used (no key / resting after a failure / busy / timeout: then the game's
+  // on-device recogniser judged). Nothing is stored or sent anywhere else.
+  PA.debug = (() => { try { return /[?&]debug(=[^&]*)?(&|$)/.test(root.location.search); } catch (e) { return false; } })();
+  let dbgLast = null;
+  const dbgRows = [];
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function dbgCall(path, form) {
+    dbgLast = null;
+    if (!/analyze|transcribe/.test(path)) return;
+    const a = form.get('audio'), info = { path, word: form.get('word') || '', sec: null, peak: null, rms: null };
+    try {
+      const pcm = new Int16Array((await a.arrayBuffer()).slice(44));
+      let pk = 0, ss = 0;
+      for (let i = 0; i < pcm.length; i++) { const v = Math.abs(pcm[i]) / 32768; if (v > pk) pk = v; ss += v * v; }
+      info.sec = pcm.length / 16000;
+      info.peak = Math.round(20 * Math.log10(pk + 1e-9));
+      info.rms = Math.round(20 * Math.log10(Math.sqrt(ss / Math.max(1, pcm.length)) + 1e-9));
+    } catch (e) { /* not a 16 kHz WAV */ }
+    dbgLast = info;
+  }
+  const WHY = { nokey: '키 없음', down: '서버 쉬는 중(앞서 실패)', off: '발음 분석 꺼짐', busy: '서버 바쁨(503)', timeout: '시간 초과',
+    network: '연결 안 됨', suspended: '키 정지', bad: '잘못된 요청', toolong: '녹음이 너무 김', server: '서버 오류' };
+  function dbgDone(r) {
+    if (!PA.debug || !dbgLast) return r;
+    dbgLast.ms = r.ms; dbgLast.ok = r.ok;
+    if (!r.ok) dbgAdd(`<b>${esc(dbgLast.word || '받아쓰기')}</b> <span style="color:#ffb86b">서버 판정 못 함 · ${esc(WHY[r.reason] || r.reason)}${r.ms != null ? ' · ' + (r.ms / 1000).toFixed(1) + '초' : ''}</span><br>→ 이번엔 기기 안 인식기가 판정해요${dbgRec()}`);
+    else if (/transcribe/.test(dbgLast.path)) dbgAdd(`<b>받아쓰기</b> "${esc(r.data && r.data.text)}" · ${(r.ms / 1000).toFixed(1)}초${dbgRec()}`);
+    return r;
+  }
+  const dbgRec = () => dbgLast && dbgLast.sec != null ? `<br><span style="opacity:.75">녹음 ${dbgLast.sec.toFixed(1)}초 · 최대 ${dbgLast.peak} dB · 평균 ${dbgLast.rms} dB</span>` : '';
+  function dbgJudge(res, data, target, table) {
+    if (!PA.debug) return res;
+    const V = { ok: ['맞음', '#7cf29c'], wrong: ['다른 낱말로 들림', '#ff8f8f'], unclear: ['다시 (애매함)', '#ffb86b'], silence: ['소리 못 들음', '#ffb86b'] }[res.verdict] || [res.verdict, '#fff'];
+    const conf = data && data.confidence != null ? data.confidence : null;
+    const exp = PA.norm(table && table[target]).join(' ');
+    const near = res.best && res.best !== target ? ` · 가장 가까운 낱말 <b>${esc(res.best)}</b>` : '';
+    dbgAdd(`<b>${esc(target)}</b> <span style="color:${V[1]}">${V[0]}</span>${isFinite(res.rel) ? ` · 차이 ${res.rel}/소리` : ''}${near}` +
+      `<br>기대 <b>${esc(exp)}</b><br>들림 <b>${esc(res.heard || '—')}</b>${conf != null ? ` · 확신 ${conf.toFixed(2)}${conf < 0.4 ? ' (낮아서 판정 안 함)' : ''}` : ''}` +
+      `${dbgLast && dbgLast.ms != null ? ' · ' + (dbgLast.ms / 1000).toFixed(1) + '초' : ''}${dbgRec()}`);
+    return res;
+  }
+  function dbgAdd(html) {
+    if (!root.document) return;
+    const d = root.document;
+    dbgRows.unshift(`<div style="padding:6px 0;border-top:1px solid rgba(255,255,255,.15)">${html}</div>`);
+    dbgRows.length = Math.min(dbgRows.length, 6);
+    let box = d.getElementById('pa-debug');
+    if (!box) {
+      box = d.createElement('div'); box.id = 'pa-debug';
+      box.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483600;max-width:min(460px,92vw);max-height:70vh;overflow:hidden;' +
+        'padding:6px 10px;border-radius:10px;background:rgba(16,20,34,.88);color:#fff;font:12px/1.45 ui-monospace,Menlo,monospace;pointer-events:none';
+      (d.body || d.documentElement).appendChild(box);
+    }
+    box.innerHTML = '<div style="font-weight:700;opacity:.8">발음 인식 (?debug)</div>' + dbgRows.join('');
+  }
 
   // ---------- key dialog (teacher-facing, Korean) ----------
   const MSG = { badkey: '키가 맞지 않아요.', suspended: '정지된 키예요. AI Engineering팀에 문의해 주세요.', network: '서버에 연결할 수 없어요.' };
