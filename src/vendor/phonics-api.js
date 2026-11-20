@@ -194,11 +194,19 @@
   /**
    * data = an analyze() result; target = the word asked for; words = the other words on screen; table = {word: [phonemes]}.
    * -> {verdict: 'ok' | 'wrong' | 'unclear' | 'silence', heard, best, d, rel}
-   *   ok      = within ~1 sound per 3 of the target, and no other word on screen is clearly closer (by 0.6+).
+   *   ok      = within PA.okMax per sound of the target, and no other word on screen was heard (almost) exactly and
+   *             clearly closer (by 0.6+).
    *             Lenient on purpose: ih/iy, a misheard end consonant and a Korean end vowel still pass.
    *   wrong   = another word on screen was heard (almost) exactly and clearly closer than the target
    *   unclear = speech, but neither
    */
+  // 2026-11-20 (user: "기준을 너무 높게 둔거 아냐?" → "응 배포해"): 0.4 → 0.5 and the near-exact rival rule. Measured on 121
+  // readings of 12 words (tools/qa_sweep.mjs: official, official + room noise, adult, child, 5 Korean-accent voices):
+  // right words passed 79 → 88 % (Korean accent 65 → 78 %, child 75 → 92 %); another card word passing 2.6 → 4.4 %;
+  // hello / Korean talk / silence / noise still never pass (the new ones: sound-alike m-words mat/mice/mail, apple → map)
+  PA.okMax = 0.5;      // 'ok' up to this much difference per sound (0.5 ≈ one wrong vowel in a 3-sound word)
+  PA.minConf = 0.4;    // below this server confidence: no verdict ('unclear')
+  PA.rivalMax = 0.34;  // another word blocks an 'ok' only when IT was heard within this much per sound (≈ exactly)
   PA.judge = function (data, target, words, table) {
     const heard = PA.norm(data && data.detected_phonemes);
     const res = { verdict: 'unclear', heard: heard.join(' '), best: null, d: {}, rel: Infinity };
@@ -208,10 +216,13 @@
     const others = cand.filter(w => w !== target).sort((a, b) => res.d[a] - res.d[b]);
     const dt = res.d[target], rival = others[0], dr = rival == null ? Infinity : res.d[rival];
     res.best = dt <= dr ? target : rival;
-    if (dt == null || (data.confidence != null && data.confidence < 0.4)) return dbgJudge(res, data, target, table);
+    if (dt == null || (data.confidence != null && data.confidence < PA.minConf)) return dbgJudge(res, data, target, table);
     const len = PA.norm(table[target]).length || 1;
     res.rel = Math.round(dt / len * 100) / 100;   // how far from the target, per sound (a game may call ≤ 0.7 "a try at it")
-    if (dt / len <= 0.4 && dt - dr < 0.6) res.verdict = 'ok';
+    // another word blocks an 'ok' only when IT was heard (almost) exactly and clearly closer — a short word matching the
+    // start of a long one cheaply ("mug" inside a Korean-accented "mushroom") no longer blocks it
+    const rivalExact = rival != null && dr / (PA.norm(table[rival]).length || 1) <= PA.rivalMax;
+    if (dt / len <= PA.okMax && !(rivalExact && dt - dr >= 0.6)) res.verdict = 'ok';
     else if (dr <= 0.5 && dt - dr >= 0.6) res.verdict = 'wrong';
     return dbgJudge(res, data, target, table);
   };
