@@ -75,4 +75,6 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
   게임 로직은 그대로. 키가 없거나 오프라인이면 예전처럼 브라우저 인식(구글).
 - 키는 기기마다 한 번(`localStorage.phonics_api_key`), 코드·저장소에 넣지 않는다(공개 repo). 설정 줄의 알약: 초록 "연결됨" / "키 입력".
 - QA: `uv run --with playwright==1.62.0 python tools/qa/api_sr.py [api|device] [base] [out]` — Mic(두 단어 → 카드 들어감) + 글리(합성어 → 칭찬) + 설정 화면.
-- 글리 목소리(edge-tts Ana, 426줄)는 아직 그대로: phonics-api TTS는 16 kHz WAV라 음질이 낮고 높이·빠르기·단어 시점을 다시 맞춰야 해서, 들어 보고 정하기로 함.
+- 글리 목소리(426줄) = 회사 phonics-api TTS의 Ana, 예전 edge-tts 설정(높이 +10Hz ≈ ×1.035, 빠르기 -5%)을 ffmpeg로 맞춤 —
+  2026-11-19 사용자가 비교 듣기에서 고른 C. 단어 시점은 whisper(phonics-kit/tools/word_marks.py). `tools/build_glee_voice.py`
+  (예전 목소리: `--engine edge`). 음성 주소의 `?v=`가 `en-US-AnaNeural-api`로 바뀌어 옛 음성이 캐시에서 나오지 않음.
