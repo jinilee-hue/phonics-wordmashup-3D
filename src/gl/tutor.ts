@@ -25,6 +25,7 @@
 import type { Glee } from './glee';
 import { GLEE_VOICE, type VoiceLine } from './gleeVoice';
 import type { JumpButton } from './jump';
+import { lang } from './lang';
 import { apiReady, hearByApi, judgeText, saidCompound, type SayVerdict } from './sayJudge';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -53,6 +54,8 @@ export type SayEnd = 'ok' | 'jump' | 'tries' | 'quiet' | 'nojudge' | 'cut';
 const SPEAK = { bgm: 0.16, listen: 0.05 };
 const IDLE_POINT = 15, IDLE_HINT = 28;
 const HOLD_MAX = 14;
+/** while the say-it turn runs the result card waits for it (a silent turn is about 20 s); this only stops a hang */
+const HOLD_SAY_MAX = 60;
 
 const norm = (s: string) => ` ${s.toLowerCase().replace(/[^a-z]+/g, ' ').trim()} `;
 function lev(a: string, b: string) {
@@ -82,6 +85,16 @@ export function heardCompound(texts: string[], p: Pair) {
   });
 }
 
+/** Glee's line in the language picked on the title (gl/lang.ts): the Korean take when there is one, else English (a
+ *  card word alone - 'Pan!', 'Pancake!' - has no Korean take) */
+function clip(id: string): { line: VoiceLine; url: string; key: string } | null {
+  const ko = lang.get() === 'ko' ? GLEE_VOICE.lines_ko[id] : undefined;
+  if (ko) return { line: ko, url: `./gl/voice/ko/${id}.mp3`, key: `ko/${id}` };
+  const en = GLEE_VOICE.lines[id];
+  return en ? { line: en, url: `./gl/voice/${id}.mp3`, key: id } : null;
+}
+const lineOf = (id: string) => clip(id)?.line;
+
 /** Clips: fetched and decoded once, played through Web Audio with the baked trim and gain. */
 class Voice {
   private ctx: AudioContext | null = null;
@@ -100,21 +113,23 @@ class Voice {
   }
 
   load(id: string) {
-    let p = this.bufs.get(id);
+    const c = clip(id);
+    if (!c) return Promise.resolve(null);
+    let p = this.bufs.get(c.key);
     if (!p) {
       // ?v=<voice>: a new voice gets new URLs, so no browser plays a cached clip of the old one (Pages caches 10 min)
-      p = fetch(`./gl/voice/${id}.mp3?v=${GLEE_VOICE.voice}`)
-        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${id}: ${r.status}`))))
+      p = fetch(`${c.url}?v=${GLEE_VOICE.voice}`)
+        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${c.key}: ${r.status}`))))
         .then(b => this.context()!.decodeAudioData(b))
         .catch(err => { console.warn('[tutor] voice', err); return null; });
-      this.bufs.set(id, p);
+      this.bufs.set(c.key, p);
     }
     return p;
   }
 
   /** Resolves true when the line has played to the end, false if it was cut or could not play. */
   async play(id: string, cut: () => boolean) {
-    const line = GLEE_VOICE.lines[id];
+    const line = lineOf(id);
     if (!line) { console.warn('[tutor] no line', id); return false; }
     const buf = await this.load(id);
     const ctx = this.context();
@@ -159,7 +174,7 @@ class Voice {
 
   /** time (s) of the n-th spoken word that matches `w`, from the start of the line */
   wordAt(id: string, w: string, from = 0) {
-    const words = GLEE_VOICE.lines[id]?.words ?? [];
+    const words = lineOf(id)?.words ?? [];
     const hit = words.slice(from).find(x => x[0].toLowerCase() === w.toLowerCase());
     return hit ? hit[1] : null;
   }
@@ -337,7 +352,7 @@ export class Tutor {
   /** the game's Mic button starts its own recogniser: stop talking so it does not hear her */
   quiet() { if (!this.scene?.busy) this.cancel(); }
 
-  /** GameScene.showToast from its Mic: say it instead of showing Korean text (true = handled) */
+  /** GameScene.showToast from its Mic: say it instead of showing the text (true = handled) */
   toast(msg: string) {
     const pair = this.pair();
     if (!this.enabled || !pair || !this.scene) return false;
@@ -350,7 +365,7 @@ export class Tutor {
       });
       return true;
     }
-    if (msg.startsWith('다시 한번')) {
+    if (msg.startsWith('Try saying')) {
       this.run(2, 'mic-miss', async j => { await this.guideMiss(j, pair); });
       return true;
     }
@@ -413,8 +428,8 @@ export class Tutor {
         if (!await this.say(j, ['hi'], () => this.glee.wave(1.4))) return;
         if (!await this.say(j, ['intro'])) return;
         const L = this.column('L'), R = this.column('R');
-        if (!await this.say(j, ['how1'], () => { if (L) this.glee.pointAt([L], GLEE_VOICE.lines.how1.dur + 0.2); })) return;
-        if (!await this.say(j, ['how2'], () => { if (R) this.glee.pointAt([R], GLEE_VOICE.lines.how2.dur + 0.2); })) return;
+        if (!await this.say(j, ['how1'], () => { if (L) this.glee.pointAt([L], lineOf('how1')!.dur + 0.2); })) return;
+        if (!await this.say(j, ['how2'], () => { if (R) this.glee.pointAt([R], lineOf('how2')!.dur + 0.2); })) return;
         if (!await this.say(j, ['ask1', 'tell'], () => { this.glee.mode = 'ask'; })) return;
       } else {
         const lead = r === 0 ? ['again'] : r <= 3 ? [this.pick('new', ['new1', 'new2', 'new3'])] : [];
@@ -448,7 +463,7 @@ export class Tutor {
   /** "What goes with pan?" pointing at the other column, then listen: the partner (or any card there) goes in */
   private async askPartner(j: Job, pair: Pair, w: string, side: 'L' | 'R') {
     const col = this.column(side);
-    if (!await this.say(j, [`wg_${w}`], () => { this.glee.mode = 'ask'; if (col) this.glee.pointAt([col], GLEE_VOICE.lines[`wg_${w}`].dur + 0.4); })) return;
+    if (!await this.say(j, [`wg_${w}`], () => { this.glee.mode = 'ask'; if (col) this.glee.pointAt([col], lineOf(`wg_${w}`)!.dur + 0.4); })) return;
     const partner = side === 'R' ? pair.word2 : pair.word1;
     const words = this.cards(side).filter(c => !c.inZone).map(c => c.word as string);
     const h = await this.listen(j, 5000, t => heardCompound(t, pair) || words.some(x => heardWord(t, x)));
@@ -467,7 +482,7 @@ export class Tutor {
     if (!await this.say(j, ['notquite'])) return;
     if (this.wrongs < 2) {
       const L = this.column('L'), R = this.column('R');
-      const dur = GLEE_VOICE.lines.lookcards.dur;
+      const dur = lineOf('lookcards')!.dur;
       await this.say(j, ['lookcards'], () => { if (L && R) this.glee.pointAt([L, R], dur + 0.6, 0.5); });
       return;
     }
@@ -553,7 +568,7 @@ export class Tutor {
   private async pointHelp(j: Job, pair: Pair, lead = false) {
     const c = this.card(pair.word1, 'L');
     if (!c || c.inZone) return;
-    const line = GLEE_VOICE.lines.help1, look = this.voice.wordAt('help1', 'look') ?? line.dur * 0.5;
+    const line = lineOf('help1')!, look = this.voice.wordAt('help1', 'look') ?? line.dur * 0.5;
     if (!await this.say(j, ['help1'], () => setTimeout(() => {
       if (j.cancelled || !c.active) return;
       this.hooks.glow(c);
@@ -568,7 +583,7 @@ export class Tutor {
     this.idle = 0;
     const pair = this.pair();
     if (!pair) return false;
-    const id = `hint_${pair.result}`, line = GLEE_VOICE.lines[id];
+    const id = `hint_${pair.result}`, line = lineOf(id);
     if (!line) return false;
     return this.run(2, 'hint', async j => {
       const t2 = this.voice.wordAt(id, line.words.length ? line.words[line.words.length - 1][0] : '') ?? line.dur * 0.6;
@@ -688,7 +703,7 @@ export class Tutor {
     this.log('jumpguide');
     this.glee.mode = null;
     if (jb.at) this.glee.pointAt([jb.at], 2.8);
-    await Promise.all([jb.guide(() => t.cancelled), GLEE_VOICE.lines.jump ? this.say(t, ['jump']) : Promise.resolve(true)]);
+    await Promise.all([jb.guide(() => t.cancelled), lineOf('jump') ? this.say(t, ['jump']) : Promise.resolve(true)]);
   }
 
   /** GameScene would clear the result card 2.4 s after the win; Glee lets it go when she has finished. */
@@ -744,10 +759,12 @@ export class Tutor {
       if (Math.abs(want - this.bgmK) < 0.003) this.bgmK = want;
       bgm.volume = Math.max(0, Math.min(1, this.bgmBase * this.bgmK));
     }
-    if (this.hold && performance.now() - this.holdAt > HOLD_MAX * 1000) this.releaseHold();
+    const holdMax = this.job?.name === 'match' ? HOLD_SAY_MAX : HOLD_MAX;
+    if (this.hold && performance.now() - this.holdAt > holdMax * 1000) this.releaseHold();
     if (!s || !this.enabled) return;
     if (!this.job) this.glee.mode = s.micRecognition ? 'listen' : null;   // the game's Mic: her ear shows too
-    if (settled && s.roundIndex !== this.readyRound && this.voice.context()?.state === 'running') {
+    // the round's intro waits for anything more important to end (it would be refused, and the round left without it)
+    if (settled && s.roundIndex !== this.readyRound && !(this.job && this.job.prio > 1) && this.voice.context()?.state === 'running') {
       this.readyRound = s.roundIndex;
       this.roundReady(s.roundIndex);
     }

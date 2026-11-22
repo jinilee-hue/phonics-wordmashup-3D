@@ -5,6 +5,7 @@ import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { gameAudio } from './audio';
 import { start3D } from './gl';
+import { langToggle } from './gl/lang';
 
 runIntro(() => {
   const game = new Phaser.Game({
@@ -118,7 +119,8 @@ function runIntro(onComplete: () => void) {
     video.muted = false;
   }, { once: true });
 
-  overlay.append(video, skipBtn);
+  // EN | KO for Glee's voice: on the title only (it leaves with this overlay)
+  overlay.append(video, skipBtn, langToggle());
   document.body.appendChild(overlay);
 
   video.play().catch(() => { overlay.remove(); onComplete(); });

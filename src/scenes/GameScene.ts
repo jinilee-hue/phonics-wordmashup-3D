@@ -526,7 +526,7 @@ export class GameScene extends Phaser.Scene {
     container.add(panel);
 
     // Title
-    const title = this.add.text(0, -panelH / 2 + sz(40), '⚙️  설정', {
+    const title = this.add.text(0, -panelH / 2 + sz(40), '⚙️  Settings', {
       fontFamily: '"Noto Sans KR", "Baloo 2"', fontSize: `${sz(28)}px`,
       color: '#FFFFFF', fontStyle: 'bold',
     }).setOrigin(0.5);
@@ -573,14 +573,14 @@ export class GameScene extends Phaser.Scene {
       container.add([label, trackBg, knobGfx, hit]);
     };
 
-    makeToggle('배경음악 (BGM)', -sz(60), () => this.bgmOn, () => { this.bgmOn = !this.bgmOn; gameAudio.unlock(); gameAudio.startBgm(); gameAudio.setBgmEnabled(this.bgmOn); });
-    makeToggle('효과음 (SFX)',   sz(8),   () => this.sfxOn, () => { this.sfxOn = !this.sfxOn; gameAudio.sfxOn = this.sfxOn; });
+    makeToggle('Music (BGM)', -sz(60), () => this.bgmOn, () => { this.bgmOn = !this.bgmOn; gameAudio.unlock(); gameAudio.startBgm(); gameAudio.setBgmEnabled(this.bgmOn); });
+    makeToggle('Sounds (SFX)', sz(8),   () => this.sfxOn, () => { this.sfxOn = !this.sfxOn; gameAudio.sfxOn = this.sfxOn; });
     // phonics-api key (phonics-kit rule): a teacher enters it once per device; the pill shows whether the company server
     // hears the words (green 연결됨) or the browser does (키 입력) — gl/apiSR.ts
     const PA = (window as unknown as { PhonicsAPI?: PhonicsAPIType }).PhonicsAPI;
     if (PA) {
       const rowY = sz(76);
-      const keyLabel = this.add.text(-panelW / 2 + sz(40), rowY, '발음 인식 서버 키', {
+      const keyLabel = this.add.text(-panelW / 2 + sz(40), rowY, 'Speech server key', {
         fontFamily: '"Noto Sans KR", "Baloo 2"', fontSize: `${sz(22)}px`, color: '#CCBBFF',
       }).setOrigin(0, 0.5);
       const pW = sz(124), pH = sz(44), pR = panelW / 2 - sz(12), pL = pR - pW;
@@ -595,7 +595,7 @@ export class GameScene extends Phaser.Scene {
         pill.fillRoundedRect(pL, rowY - pH / 2, pW, pH, pH / 2);
         pill.fillStyle(on ? 0x5ff0a8 : 0x9a93c0, 1);
         pill.fillCircle(pL + sz(20), rowY, sz(7));
-        pillText.setText(on ? '연결됨' : '키 입력');
+        pillText.setText(on ? 'Linked' : 'Add key');
       };
       paintKey();
       window.addEventListener('phonicsapi:status', paintKey);
@@ -611,7 +611,7 @@ export class GameScene extends Phaser.Scene {
     const closeBg = this.add.graphics();
     closeBg.fillStyle(0x5a3fbf, 1);
     closeBg.fillRoundedRect(-sz(72), closeBtnY - sz(22), sz(144), sz(44), sz(12));
-    const closeText = this.add.text(0, closeBtnY, '닫기', {
+    const closeText = this.add.text(0, closeBtnY, 'Close', {
       fontFamily: '"Noto Sans KR", "Baloo 2"', fontSize: `${sz(22)}px`, color: '#FFFFFF', fontStyle: 'bold',
     }).setOrigin(0.5);
     const closeHit = this.add.graphics().setAlpha(0.001);
@@ -960,7 +960,7 @@ export class GameScene extends Phaser.Scene {
 
     const SR = (window as unknown as Record<string, unknown>).SpeechRecognition
              || (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
-    if (!SR) { this.showToast('이 브라우저는 음성 인식을 지원하지 않아요'); return; }
+    if (!SR) { this.showToast("This browser can't listen."); return; }
 
     const { gw: GW, gh: GH } = this;
     const s  = Math.min(GW / 1280, GH / 720);
@@ -1067,9 +1067,9 @@ export class GameScene extends Phaser.Scene {
         }
       } else if (hasWord1 || hasWord2) {
         const found = hasWord1 ? pair.word1 : pair.word2;
-        this.showToast(`"${found}" 들었어요! 다른 단어도 말해봐요`);
+        this.showToast(`"${found}" — got it! Now say the other word!`);
       } else {
-        this.showToast('다시 한번 생각해서 말해볼까요?');
+        this.showToast('Try saying it again!');
       }
     };
 
@@ -1996,15 +1996,15 @@ export class GameScene extends Phaser.Scene {
     const CX = Math.round(GW / 2), CY = Math.round(GH / 2);
 
     const rows: { kind: string; icon: string; name: string; color: number; earn: string; spend: string }[] = [
-      { kind: 'score', icon: 'icon_star',  name: '별 Star',   color: 0xF5B301,
-        earn: '정답을 맞히면 +10  ·  첫 시도 정답은 보너스!',
-        spend: '힌트 사용 시 −5  ·  별 100개 → 동전 1개로 교환' },
-      { kind: 'coin',  icon: 'icon_money', name: '동전 Coin',  color: 0xE08A00,
-        earn: '별 100개로 구매  ·  한 세트(6판) 완주 보너스',
-        spend: '동전 1개 = 재도전 기회 1회 (틀려도 계속!)' },
-      { kind: 'gem',   icon: 'icon_gem',   name: '보석 Gem',   color: 0x2E9BE0,
-        earn: '세트 완주  ·  연속 정답(콤보) 보너스로 +1',
-        spend: '보석 1개 = 못 모은 카드를 보기로 소환 (도감 채우기)' },
+      { kind: 'score', icon: 'icon_star',  name: 'Star',   color: 0xF5B301,
+        earn: 'Right answer: +10  ·  Right on the first try: bonus!',
+        spend: 'A hint: −5  ·  100 stars → 1 coin' },
+      { kind: 'coin',  icon: 'icon_money', name: 'Coin',  color: 0xE08A00,
+        earn: 'Trade 100 stars  ·  Bonus for a whole set (6 rounds)',
+        spend: '1 coin = 1 more try (keep going!)' },
+      { kind: 'gem',   icon: 'icon_gem',   name: 'Gem',   color: 0x2E9BE0,
+        earn: 'Finish a set  ·  +1 for a combo (right in a row)',
+        spend: '1 gem = bring a card you don\'t have yet (fill your book!)' },
     ];
 
     const layer = this.add.container(0, 0).setDepth(82).setAlpha(0);
@@ -2044,7 +2044,7 @@ export class GameScene extends Phaser.Scene {
     const pad = Math.round(panelW * 0.035);
     const titleH = Math.round(panelH * 0.1);
     const titleY = pageY + pad + titleH * 0.4;
-    panel.add(this.add.text(pageX + pad, titleY, '포인트 & 혜택 안내', {
+    panel.add(this.add.text(pageX + pad, titleY, 'Points & Rewards', {
       fontFamily: '"Baloo 2"', fontSize: `${Math.round(titleH * 0.5)}px`, color: '#5A2E94', fontStyle: 'bold',
     }).setOrigin(0, 0.5));
 
@@ -2103,8 +2103,8 @@ export class GameScene extends Phaser.Scene {
         leftCont.add(t);
         y += Math.round(fs * 1.5) + t.height + Math.round(fs * 1.0);
       };
-      addBlock('모으기', rr.earn);
-      addBlock('쓰기', rr.spend);
+      addBlock('Get', rr.earn);
+      addBlock('Use', rr.spend);
     };
 
     // 우측 목록 (탭하여 선택 전환) — 닫기(X) 버튼 아래에서 시작해 겹침 방지

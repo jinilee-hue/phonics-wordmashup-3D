@@ -14,18 +14,35 @@ const Native = W.SpeechRecognition || W.webkitSpeechRecognition;
 
 export type Take = { kind: 'speech'; pcm: Float32Array; sr: number } | { kind: 'silence' } | { kind: 'nomic' };
 
+/** how long the microphone may take to open: an unanswered permission prompt = no microphone (nothing can judge) */
+const MIC_WAIT_MS = 15000;
+
 /** One utterance from the microphone (voice detector: 150 ms over the room's level starts it, 0.7 s of quiet ends it).
- *  `waitMs`: no voice by then = silence; `capMs`: the whole take ends there; `stop()`: end now (keep what was said). */
+ *  `waitMs`: no voice by then = silence; `capMs`: the whole take ends there; `stop()`: end now (keep what was said).
+ *  Opening the microphone races MIC_WAIT_MS and `stop()` (JUMP): a permission prompt nobody answers can't hold the turn. */
 export async function recordTake(o: { waitMs?: number; capMs?: number; stop?: () => boolean; onStart?: () => void } = {}): Promise<Take> {
   const waitMs = o.waitMs ?? 8000, capMs = o.capMs ?? 8000;
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const gum = navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    let poll = 0, timer = 0;
+    const got = await Promise.race([
+      gum,
+      new Promise<'timeout'>(res => { timer = window.setTimeout(() => res('timeout'), MIC_WAIT_MS); }),
+      new Promise<'stop'>(res => { poll = window.setInterval(() => { if (o.stop?.()) res('stop'); }, 100); }),
+    ]).finally(() => { clearTimeout(timer); clearInterval(poll); });
+    if (got === 'timeout' || got === 'stop') {
+      void gum.then(s => s.getTracks().forEach(t => t.stop()), () => {});   // answered later: close it again
+      if (got === 'stop') return { kind: 'silence' };
+      if (W.__wmLog) console.log('[mic] no answer to the permission prompt in', MIC_WAIT_MS, 'ms');
+      return { kind: 'nomic' };
+    }
+    stream = got;
   } catch {
     return { kind: 'nomic' };
   }
   const ctx = new AudioContext();
-  try { await ctx.resume(); } catch { /* stays suspended → the safety time-out below */ }
+  try { await Promise.race([ctx.resume(), new Promise(r => setTimeout(r, 1000))]); } catch { /* stays suspended → the safety time-out below */ }
   const src = ctx.createMediaStreamSource(stream);
   const proc = ctx.createScriptProcessor(2048, 1, 1), sink = ctx.createGain();
   sink.gain.value = 0;
@@ -34,7 +51,10 @@ export async function recordTake(o: { waitMs?: number; capMs?: number; stop?: ()
   const chunks: Float32Array[] = [];
   const t0 = performance.now();
   let floor = 0, nCal = 0, run = 0, voiceAt = -1, lastVoice = -1;
-  await new Promise<void>((done) => {
+  await new Promise<void>((resolve) => {
+    // stop() is also checked here: a suspended context never calls onaudioprocess
+    const poll = setInterval(() => { if (o.stop?.()) done(); }, 100);
+    const done = () => { clearTimeout(safety); clearInterval(poll); resolve(); };
     const safety = setTimeout(done, capMs + 1000);
     proc.onaudioprocess = (e) => {
       const f = new Float32Array(e.inputBuffer.getChannelData(0));
@@ -48,7 +68,7 @@ export async function recordTake(o: { waitMs?: number; capMs?: number; stop?: ()
         else if (now - lastVoice > 160) run = 0;
       }
       const quiet = voiceAt >= 0 && now - lastVoice > 700;
-      if (o.stop?.() || quiet || now - t0 > capMs || (voiceAt < 0 && now - t0 > waitMs) || (voiceAt >= 0 && now - voiceAt > 6000)) { clearTimeout(safety); done(); }
+      if (o.stop?.() || quiet || now - t0 > capMs || (voiceAt < 0 && now - t0 > waitMs) || (voiceAt >= 0 && now - voiceAt > 6000)) done();
     };
   });
   proc.onaudioprocess = null;
