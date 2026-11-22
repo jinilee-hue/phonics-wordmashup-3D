@@ -122,6 +122,33 @@ export async function hearText(o: { waitMs: number; capMs: number; stop: () => b
   return (await deviceText(pcm16, o.modelWaitMs ?? 0, o.stop)) || null;
 }
 
+/** The game's own Mic button (scenes/GameScene.ts startMic) makes `new SpeechRecognition()`: it gets this — the same take
+ *  and text as Glee's questions (phonics-api, else the on-device recogniser), never the browser's own recogniser, which
+ *  sends the voice to Google (user 2026-11-22: "브라우저 인식" → whisper). Pressing Mic again (stop) cancels the take. */
+class LocalSR {
+  lang = 'en-US'; interimResults = false; maxAlternatives = 1; continuous = false;
+  onresult: ((e: Any) => void) | null = null;
+  onerror: ((e: Any) => void) | null = null;
+  onend: (() => void) | null = null;
+  onstart: (() => void) | null = null;
+  private stopReq = false;
+  private started = false;
+  start() { if (this.started) throw new Error('already started'); this.started = true; void this.run(); }
+  stop() { this.stopReq = true; }
+  abort() { this.stopReq = true; }
+  private async run() {
+    let text: string | null = null;
+    if (!micOff()) {
+      try { text = await hearText({ waitMs: 8000, capMs: 8000, stop: () => this.stopReq, modelWaitMs: MODEL_WAIT_MS }); }
+      catch { /* nothing could read the take */ }
+    }
+    if (micOff()) this.onerror?.({ error: 'not-allowed' });
+    else if (text && !this.stopReq) this.onresult?.({ resultIndex: 0, results: [Object.assign([{ transcript: text, confidence: 1 }], { isFinal: true })] });
+    this.onend?.();
+  }
+}
+W.SpeechRecognition = W.webkitSpeechRecognition = LocalSR;
+
 // the on-device recogniser loads in the background from the first tap or key (the intro and title go on as they are)
 for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (sttState() === 'off') sttPreload(); }, { once: true, capture: true, passive: true });
 W.__wmLog = new URLSearchParams(location.search).has('log');
