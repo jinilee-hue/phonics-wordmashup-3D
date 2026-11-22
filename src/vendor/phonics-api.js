@@ -146,7 +146,9 @@
 
   // ---------- judging among the words on screen ----------
   const UNRELEASED = { td: 't', dd: 'd', kd: 'k', gd: 'g', pd: 'p', bd: 'b' };
-  const RENAME = { axr: 'er', ax: 'ah', ix: 'ih', nx: 'n', el: 'l', em: 'm', en: 'n', dx: 't' };
+  // dx (the flap) stays itself: a Korean 미러's ㄹ is a flap, which is an r there, while an American "water"'s flap is a t —
+  // near both (NEAR below)
+  const RENAME = { axr: 'er', ax: 'ah', ix: 'ih', nx: 'n', el: 'l', em: 'm', en: 'n' };
   /** server phoneme symbols -> plain ARPABET; the Korean "eu" insertions are dropped (feedback, not a different word) */
   PA.norm = function (list) {
     const out = [];
@@ -166,7 +168,11 @@
   // passed unchanged at 5.2 %. m/b, n/d: a Korean word-initial m / n comes out half like b / d ("mitt" -> "bit"); p/m: a
   // Korean unreleased end p is heard as m ("맵" -> "m ae m", which sat nearer to "man")
   const NEAR = new Set(['ih iy', 'ih eh', 'iy ey', 'ah aa', 'ah ao', 'aa ao', 'ah uh', 'uw uh', 'eh ae', 'eh ey', 'ow ao', 'er r', 'n ng', 'm n',
-    'g k', 'b p', 'd t', 'm b', 'n d', 'p m']
+    'g k', 'b p', 'd t', 'm b', 'n d', 'p m',
+    // Korean-accented r (user 2026-11-22: "eyecatch 거울 발화인식 잘 못하는거 같아"): 미러 is heard 'm iy dx ao' — the r a flap, the
+    // -er an open 어 vowel (ah/ao/aa) — and was judged 'meat'. The flap is near r, t and d; the r-coloured er near those vowels
+    // (not dx~t: 미트 'meat' and 미러 'mirror' differ exactly there)
+    'dx r', 'dx d', 'er ah', 'er ao', 'er aa']
     .flatMap(s => { const [a, b] = s.split(' '); return [a + ' ' + b, b + ' ' + a]; }));
   // a different vowel changes the word (meat / mop) more than a misheard end consonant (map / "mak"): 1.3
   const sub = (a, b) => a === b ? 0 : NEAR.has(a + ' ' + b) ? 0.4 : VOWELS.has(a) && VOWELS.has(b) ? 1.3 : 1;
@@ -185,7 +191,9 @@
     let best = prev[m] + tail[0];
     for (let i = 1; i <= n; i++) {
       const cur = new Array(m + 1); cur[0] = lead[i];
-      for (let j = 1; j <= m; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + sub(heard[i - 1], exp[j - 1]));
+      // an extra schwa right after a vowel (미러 heard 'm iy ah dx ao') is a glide, not a sound of its own: half price
+      const extra = heard[i - 1] === 'ah' && i >= 2 && VOWELS.has(heard[i - 2]) ? 0.5 : 1;
+      for (let j = 1; j <= m; j++) cur[j] = Math.min(prev[j] + extra, cur[j - 1] + 1, prev[j - 1] + sub(heard[i - 1], exp[j - 1]));
       prev = cur;
       best = Math.min(best, cur[m] + tail[i]);
     }
