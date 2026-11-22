@@ -29,11 +29,11 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
     - 몸 색: 위는 노랑, 아래는 민트(2026-10-27 시안 중 선택). 캐릭터 시트의 핑크·파스텔은 분홍·보라 네온 무대와 섞여 잘 안 보였다. 글리터도 같은 계열로 맞췄다.
     - 테두리 선 없음(검은 외곽선 대신 몸빛 가장자리). 가장자리는 한 픽셀 안을 4개 광선(낮은 품질은 2개)으로 나눠 쏘아 계단 없이 매끄럽게 그린다.
     - 2D 모드(`?q=2d`, 느린 기기 폴백)에는 나오지 않는다.
-  - `src/gl/tutor.ts` — 글리가 말로 게임을 이끈다(말풍선·글자 없이 음성만, 정해진 영어 문장 + 음성 인식(아래 phonics-api). 조직 정책상 LLM 대화는 쓰지 않음). 한 번에 한 명만 말하고, 아이가 움직이면 글리가 말을 멈춘다. 듣는 동안은 머리 옆에 민트 귀 아이콘만 보인다(뒤에 배지 없이 배경이 비침, 몸의 민트와 같은 계열).
-    - 라운드: "Which two go together?" → 듣기 → 카드 단어를 말하면 그 카드를 넣고 "What goes with pan?" → 맞으면 "Pan and cake make... pancake!" → "Say it with me!" → 못 알아들으면 "Listen! Pan! Cake! Pancake! Your turn!" → 칭찬 → 다음 판.
-    - 오답(글자 토스트 대신 음성): 두 카드를 읽고 "That's not a word!" → 한 장이 맞았으면 "Pan is right!" 하며 그 카드를 다시 넣고 짝을 묻는다. 둘 다 틀리면 1번째 "Let's try again!", 2번째 첫 카드를 보여 주고 넣은 뒤 짝을 묻는다, 3번째 힌트. 원래 Mic 버튼의 한국어 안내도 글리 목소리로 바뀐다.
-    - 음성: `tools/build_glee_voice.py`(edge-tts `en-US-AnaNeural` +10Hz −5%, 시제품용) → `public/gl/voice/*.mp3`, `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다. 파일 주소에 `?v=<목소리>`가 붙어 목소리를 바꾸면 캐시된 옛 목소리가 나오지 않는다.
-      Jenny(+15Hz)로 바꿨다가 Ana로 되돌렸다(사용자: "목소리는 Ana가 나아"). 참고: Whisper 언어 판별로 한 단어 대사 80개 중 Ana는 65개만 영어(중국어 4, 일본어 9), Jenny는 80개 모두 영어였다. 목소리를 바꿀 때는 먼저 들려 주고 정한다.
+  - `src/gl/tutor.ts` — 글리가 말로 게임을 이끈다(말풍선·글자 없이 음성만, 정해진 문장(영어, 또는 인트로에서 고른 한국어) + 음성 인식(아래 phonics-api). 조직 정책상 LLM 대화는 쓰지 않음). 한 번에 한 명만 말하고, 아이가 움직이면 글리가 말을 멈춘다. 듣는 동안은 머리 옆에 민트 귀 아이콘만 보인다(뒤에 배지 없이 배경이 비침, 몸의 민트와 같은 계열).
+    - 라운드: "Which two go together?" → 듣기 → 카드 단어를 말하면 그 카드를 넣고 "What goes with pan?" → 맞으면 "Pan and cake make... pancake!" → "Say it with me!" → 못 알아들으면 "Listen! Pan! Cake! Pancake! Your turn!" → 칭찬 → 다음 판. JUMP·두 번 틀림·무음·보상 규칙은 [README.md](README.md).
+    - 오답(글자 토스트 대신 음성): 두 카드를 읽고 "That's not a word!" → 한 장이 맞았으면 "Pan is right!" 하며 그 카드를 다시 넣고 짝을 묻는다. 둘 다 틀리면 1번째 "Let's try again!", 2번째 첫 카드를 보여 주고 넣은 뒤 짝을 묻는다, 3번째 힌트. Mic 버튼의 안내 토스트도 글리 목소리로 바뀐다.
+    - 음성: `tools/build_glee_voice.py`(지금은 파닉스 게임 공통 튜터 목소리, 아래 "음성 인식" 절 끝) → `public/gl/voice/*.mp3`(한국어 `public/gl/voice/ko/*.mp3`), `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다. 파일 주소에 `?v=<목소리>`가 붙어 목소리를 바꾸면 캐시된 옛 목소리가 나오지 않는다.
+      예전 edge-tts 시제품(`en-US-AnaNeural` +10Hz −5%, `--engine edge`) 때: Jenny(+15Hz)로 바꿨다가 Ana로 되돌렸다(사용자: "목소리는 Ana가 나아"). 참고: Whisper 언어 판별로 한 단어 대사 80개 중 Ana는 65개만 영어(중국어 4, 일본어 9), Jenny는 80개 모두 영어였다. 목소리를 바꿀 때는 먼저 들려 주고 정한다.
 - 배경 깊이: `tools/build_depth.py`가 배경 그림의 깊이 지도(Depth Anything V2 Small, 로컬 CPU)를 만들어 `public/gl/bg_depth.png`에 저장 → 배경이 입체 부조가 되어 카메라가 움직이면 시차가 생긴다(정지 화면은 원본과 똑같다).
   - 실행: `uv run --with torch --with transformers --with pillow --with numpy python tools/build_depth.py`
 - 인트로 영상(`Word Mashup/Word Mashup.mp4`): 오른쪽 아래 Gemini(Veo) 반짝이 마크를 지운 판. 마크가 반투명하게 섞인 식을 거꾸로 풀어 원래 화면을 되살렸다(지우개로 칠한 것이 아님). 마크 모양은 GeminiWatermarkTool(MIT, allenk)의 보정 마스크에서 시작해, 이 영상의 평평한 장면에서 잰 값으로 고쳤다(영상 마크는 가운데가 테두리보다 15% 옅다). 안쪽 세기는 프레임마다 둘레 밝기에 맞추고, 별 테두리 2~3px에 남는 약한 계단만 지운 뒤 바깥에서 다시 이어 붙였다(Poisson). 테두리에 남는 1~2px 점도 지운다. 만드는 스크립트: 세션 scratch `wm/wmk/veo_v7.py`. 마크 밖 화면과 소리는 그대로(재인코딩만). 마크가 있던 원래 영상은 git 기록(`a489ef7` 이전)과 원본 저장소에 있다.
@@ -61,7 +61,8 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
 3. 3D 카드 앞면(새 카드만 만들고 기존 카드는 그대로):
    `uv run --with pillow --with numpy python tools/unwarp_cards.py --debug <폴더> left_<단어> right_<단어> ...`
    → `public/gl/cards/*.webp` + `src/gl/cardFaces.ts`에 추가. `--debug` 시트로 잘림을 눈으로 확인.
-4. 글리 목소리: `uv run --with edge-tts --with numpy python tools/build_glee_voice.py` (새 대사만 내려받고 기존 파일은 그대로).
+4. 글리 목소리: `uv run --quiet --with numpy python tools/build_glee_voice.py` (키 `~/.config/phonics-api/key`; 새 대사만 받고 기존 것은 캐시에서 씀).
+5. 말하기 판정의 기대 소리열: `python3 tools/build_phonemes.py` → `src/data/phonemes.ts`.
 - 2026-10-27: 교재 합성어 13개 추가(backpack, basketball, mailbox, playpen, popcorn, raincoat, shoelace, treetop, wheelchair, peanut, spaceship, starlight, windmill) → 43개.
 
 ## 배경 A안 시험 (기본 화면은 그대로)
@@ -70,13 +71,13 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
 
 ## 음성 인식 = phonics-api (파닉스 공통 규칙, 2026-11-19 — `../phonics-kit`)
 - 듣기는 모두 게임이 직접 녹음한다(`src/gl/apiSR.ts` recordTake: 150 ms 넘는 소리로 시작, 0.7 s 조용하면 끝).
-  순서: **phonics-api**(설정(톱니) › **발음 인식 서버 키**가 있는 기기, 서버가 답할 때) → **기기 안 whisper**(tiny.en, transformers.js
+  순서: **phonics-api**(Settings(톱니) › **Speech server key**가 있는 기기, 서버가 답할 때) → **기기 안 whisper**(tiny.en, transformers.js
   워커 `src/gl/stt.ts`·`sttWorker.ts`, 모델·런타임은 사이트에서 `public/stt/` 약 55 MB) → 판정 불가('nojudge', 보상 없이 넘어감).
   브라우저 음성 인식(구글로 음성 전송)은 쓰지 않는다(2026-11-22 사용자 결정: 아이 음성은 제3자 서버로 보내지 않음).
   글리의 질문("Tell me!", "What goes with pan?")은 글자(phonics-api 받아쓰기 또는 whisper), 말하기 차례는 phonics-api 분석 또는
-  whisper 글자의 엄격 규칙(`sayJudge.ts`). 모델은 첫 탭 뒤 백그라운드로 받고, 아직 로딩 중이면 말하기 차례는 최대 8 s 기다린다.
-- 키는 기기마다 한 번(`localStorage.phonics_api_key`), 코드·저장소에 넣지 않는다(공개 repo). 설정 줄의 알약: 초록 "연결됨" / "키 입력".
-- QA: `uv run --with playwright==1.62.0 python tools/qa/api_sr.py [api|device] [base] [out]` — Mic(두 단어 → 카드 들어감) + 글리(합성어 → 칭찬) + 설정 화면.
-- 글리 목소리(426줄) = 회사 phonics-api TTS의 Ana, 예전 edge-tts 설정(높이 +10Hz ≈ ×1.035, 빠르기 -5%)을 ffmpeg로 맞춤 —
-  2026-11-19 사용자가 비교 듣기에서 고른 C. 단어 시점은 whisper(phonics-kit/tools/word_marks.py). `tools/build_glee_voice.py`
-  (예전 목소리: `--engine edge`). 음성 주소의 `?v=`가 `en-US-AnaNeural-api`로 바뀌어 옛 음성이 캐시에서 나오지 않음.
+  whisper 글자의 엄격 규칙(`sayJudge.ts`). 게임의 Mic 버튼도 같은 길이다(`apiSR.ts`가 `window.SpeechRecognition`을 `LocalSR`로 바꿈). 모델은 첫 탭 뒤 백그라운드로 받고, 아직 로딩 중이면 말하기 차례는 최대 8 s 기다린다.
+- 키는 기기마다 한 번(`localStorage.phonics_api_key`), 코드·저장소에 넣지 않는다(공개 repo). 설정 줄의 알약: 초록 "Linked" / "Add key".
+- QA: `tools/qa/api_sr.py`는 예전 Mic 연결(키가 없으면 브라우저 인식기)과 말하기 차례의 transcribe 로그를 전제로 해서 지금 코드와 맞지 않는다(README.md "도구").
+- 글리 목소리(영어 427줄 · 한국어 313줄) = 파닉스 게임 공통 튜터 목소리: 회사 phonics-api TTS의 Azure `en-US-AvaMultilingualNeural`을
+  예전 'aiden' 높이·빠르기(×1.109 / ×1.035)로 맞춤(phonics-kit `tts_voice.tutor`, 2026-11-22부터). 단어 시점은 whisper(phonics-kit/tools/word_marks.py).
+  `tools/build_glee_voice.py`(예전 목소리: `--engine phonics-api` = Ana, `--engine edge` = 시제품). 음성 주소의 `?v=`가 `tutor-ava-aiden`이라 옛 음성이 캐시에서 나오지 않음.

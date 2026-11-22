@@ -270,7 +270,9 @@ function attach(scene: Any) {
     state.tutor?.onMatch();
     for (const c of [scene.selectedLeft, scene.selectedRight]) if (c?.active) state.cards?.meet(c, scene.cx);
   });
-  wrapOnce(scene, 'showFinale', () => { state.glee?.react('finale'); state.tutor?.onFinale(); });
+  // out of hearts: the game ends without the finale cheer ("Wow! You made six new words!" would not be true)
+  wrapOnce(scene, 'outOfHearts', () => state.tutor?.stop());
+  wrapOnce(scene, 'showFinale', () => { if (scene.hearts <= 0) return; state.glee?.react('finale'); state.tutor?.onFinale(); });
   state.mashup?.clear();
   if (state.glee) {
     state.glee.reset();

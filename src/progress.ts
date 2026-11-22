@@ -1,6 +1,7 @@
 // The phonics games' shared progress record (phonics-kit phonics-progress.js, launcher F1, user 2026-11-22): when a game
-// ends (the Compound Book after round 6) one line goes into localStorage 'phonics.progress' under 'word-mashup' - the
-// words made, the words said in Glee's say-it turns, the stars / coins / gems, the time and the wrong pairs. Records only:
+// ends (the Compound Book after round 6, or earlier when the hearts run out: won false) one line goes into localStorage
+// 'phonics.progress' under 'word-mashup' - the words made, the words said in Glee's say-it turns, the stars / coins / gems,
+// the time, the wrong pairs, the hearts left and the coins spent on hints (user 2026-11-22: a cost). Records only:
 // no level select (user: "기록 저장만"). Hooked on GameScene's prototype, so the 2D game records too (no say-it turns there).
 import './vendor/phonics-progress.js';
 import { GameScene } from './scenes/GameScene';
@@ -26,8 +27,9 @@ P.showFinale = function (this: Any, ...a: Any[]) {
       said: run.said, sayTurns: run.sayTurns,
       score: this.score, coins: this.coins, gems: this.gems,
       time: Math.round((performance.now() - run.t0) / 100) / 10,
-      misses: run.misses, won: true,
-    }, { higher: ['said', 'gems'] });
+      misses: run.misses, won: this.hearts > 0,
+      hearts: this.hearts, coinsSpent: this.coinsSpent,
+    }, { higher: ['said', 'gems', 'hearts'] });
   } catch (err) { console.warn('[progress]', err); }
   return finale.apply(this, a);
 };

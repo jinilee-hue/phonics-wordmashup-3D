@@ -680,6 +680,9 @@ export class Tutor {
     this.run(3, 'finale', async j => { await this.say(j, ['end1', 'end2']); });
   }
 
+  /** the game ended early (no hearts left): stop talking and listening, no more help */
+  stop() { this.cancel(); }
+
   onPoke() {
     if (this.job) return;
     this.run(0, 'poke', async j => { await this.say(j, [this.pick('poke', ['poke1', 'poke2', 'poke3'])]); });

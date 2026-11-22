@@ -4,6 +4,8 @@ import { pickRoundPairs, COMPOUND_PAIRS, type CompoundPair } from '../data/compo
 import { gameAudio } from '../audio';
 
 const ROUNDS = 6;
+const HEARTS = 3;      // a wrong pair costs one; none left ends the game (user 2026-11-22: a game needs a cost)
+const HINT_COST = 5;   // coins for the Hint button (Glee's own idle help stays free)
 
 export class GameScene extends Phaser.Scene {
   // Dynamic screen dimensions — set in create()
@@ -34,6 +36,17 @@ export class GameScene extends Phaser.Scene {
   private score = 0;
   private coins = 0;
   private gems = 0;
+  private hearts = HEARTS;
+  private coinsSpent = 0;
+  private heartText!: Phaser.GameObjects.Text;
+  private heartIcon!: Phaser.GameObjects.Image;
+  /** each HUD badge: its pieces (shaken together) and where the "−n" chip goes */
+  private badgeInfo: Partial<Record<'heart' | 'score' | 'coin' | 'gem', { parts: { x: number }[]; cx: number; bottom: number; ix: number; iy: number; isz: number; k: number; icon: string }>> = {};
+  /** the Hint button's pieces, and their grey look while coins are short */
+  private hintParts: (Phaser.GameObjects.Image | Phaser.GameObjects.Text)[] = [];
+  private hintGrey: Phaser.FX.ColorMatrix[] = [];
+  private hintOff: boolean | null = null;
+  private shaking = new Set<object>();
   private scoreText!: Phaser.GameObjects.Text;
   private coinText!: Phaser.GameObjects.Text;
   private gemText!: Phaser.GameObjects.Text;
@@ -129,6 +142,11 @@ export class GameScene extends Phaser.Scene {
     this.score = 0;
     this.coins = 0;
     this.gems  = 0;
+    this.hearts = HEARTS;
+    this.coinsSpent = 0;
+    this.badgeInfo = {};
+    this.hintParts = []; this.hintGrey = []; this.hintOff = null;
+    this.shaking.clear();
     this.busy = false;
 
     // Audio — keep the user's toggle choices across restarts, and unlock +
@@ -144,6 +162,7 @@ export class GameScene extends Phaser.Scene {
 
     this.buildStageBackground();
     this.buildParticleBurst();
+    this.makeHeartIcons();
     this.buildHUD();
     this.buildGravityZone();
     this.buildBottomNav();
@@ -152,6 +171,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number) {
+    this.refreshHint();
     if (this.zoneSpinContainer?.active) {
       this.zoneSpinContainer.rotation += 0.012;
     }
@@ -332,6 +352,7 @@ export class GameScene extends Phaser.Scene {
         g.fillStyle(0x000000, 0.06);
         g.fillRoundedRect(cx - w / 2 - sp, cy - bodyH / 2 - sp, w + sp * 2, bodyH + sp * 2, r + sp);
       }
+      return g;
     };
 
     // ── Back button (Figma: left:14, top:13, size:62) — 공통 그림자 함수 사용 ──
@@ -400,7 +421,8 @@ export class GameScene extends Phaser.Scene {
     const b3L = sLeft - gap - bW;
     const b2L = b3L - gap - bW;
     const b1L = b2L - gap - bW;
-    const badgeX = [b1L, b2L, b3L];
+    const b0L = b1L - gap - bW;                  // Heart badge, left of the star
+    const badgeX = [b0L, b1L, b2L, b3L];
 
     // 설정 버튼 — 공통 그림자 함수 사용(back/pill/badge와 동일)
     drawTopShadow(sLeft, bSz, sz(16));
@@ -414,7 +436,8 @@ export class GameScene extends Phaser.Scene {
     });
 
     // ── Currency badges ───────────────────────────────────────────
-    const badges: { bgKey: string; iconKey: string; kind: 'score' | 'coin' | 'gem' }[] = [
+    const badges: { bgKey: string; iconKey: string; kind: 'heart' | 'score' | 'coin' | 'gem' }[] = [
+      { bgKey: 'badge_coin_main', iconKey: 'icon_heart', kind: 'heart' },
       { bgKey: 'badge_star_main', iconKey: 'icon_star',  kind: 'score' },
       { bgKey: 'badge_coin_main', iconKey: 'icon_money', kind: 'coin'  },
       { bgKey: 'badge_coin_main', iconKey: 'icon_gem',   kind: 'gem'   },
@@ -424,9 +447,9 @@ export class GameScene extends Phaser.Scene {
       const bx = badgeX[i];
 
       // #6A92BE 파란색 밑단(3D 그림자 박스) — 메인보다 sz(4) 아래로 + 부드러운 그림자
-      drawTopShadow(bx, bW, sz(16));
-      this.add.image(bx + bW / 2, midY + sz(4), 'badge_shadow').setDisplaySize(bW, bH).setDepth(50);
-      this.add.image(bx + bW / 2, midY, cfg.bgKey).setDisplaySize(bW, bH).setDepth(51);
+      const shadow = drawTopShadow(bx, bW, sz(16));
+      const base = this.add.image(bx + bW / 2, midY + sz(4), 'badge_shadow').setDisplaySize(bW, bH).setDepth(50);
+      const body = this.add.image(bx + bW / 2, midY, cfg.bgKey).setDisplaySize(bW, bH).setDepth(51);
 
       // 숫자용 어두운 인셋 바 (세로 중앙)
       const ibH = sz(40);
@@ -437,15 +460,16 @@ export class GameScene extends Phaser.Scene {
 
       // 아이콘 (세로 중앙, 왼쪽으로 살짝 튀어나오게)
       const iconSz = sz(46);
-      this.iconShadow(this.add.image(bx + sz(8) + iconSz / 2, midY, cfg.iconKey).setDisplaySize(iconSz, iconSz).setDepth(53));
+      const icon = this.iconShadow(this.add.image(bx + sz(8) + iconSz / 2, midY, cfg.iconKey).setDisplaySize(iconSz, iconSz).setDepth(53));
 
-      const numTxt = this.add.text(bx + sz(107), midY, '0', {
+      const numTxt = this.add.text(bx + sz(107), midY, cfg.kind === 'heart' ? `${this.hearts}` : '0', {
         fontFamily: '"Inter", "Baloo 2"', fontSize: `${sz(22)}px`,
         color: '#FFFFFF', fontStyle: 'bold',
       }).setOrigin(1, 0.5).setDepth(53);
       if (cfg.kind === 'score') this.scoreText = numTxt;
       if (cfg.kind === 'coin')  this.coinText  = numTxt;
       if (cfg.kind === 'gem')   this.gemText   = numTxt;
+      if (cfg.kind === 'heart') { this.heartText = numTxt; this.heartIcon = icon; }
 
       // + 버튼 (세로 중앙, 우측 끝) — 클릭 시 재화 정책 안내 모달
       const plusImg = this.add.image(bx + bW - sz(13), midY, 'btn_plus').setDisplaySize(sz(32), sz(32)).setDepth(53);
@@ -457,6 +481,10 @@ export class GameScene extends Phaser.Scene {
         this.tweens.add({ targets: plusImg, scaleX: 0.85, scaleY: 0.85, duration: 80, yoyo: true, ease: 'Back.easeIn' });
         this.showCurrencyInfo(cfg.kind);
       });
+      this.badgeInfo[cfg.kind] = {
+        parts: [shadow, base, body, ibG, icon, numTxt, plusImg],
+        cx: bx + bW / 2, bottom: midY + bH / 2 + sz(4), ix: icon.x, iy: midY, isz: iconSz, k: s * HUD_K, icon: cfg.iconKey,
+      };
     });
   }
 
@@ -872,9 +900,11 @@ export class GameScene extends Phaser.Scene {
 
     const drawLayered = (figX: number, figW: number, shKey: string, mainKey: string, topKey: string) => {
       const x = p(figX), w = p(figW);
-      this.add.image(x + w / 2, navCY + shadowOff, shKey  ).setDisplaySize(w, navH).setDepth(40);
-      this.add.image(x + w / 2, navCY,             mainKey).setDisplaySize(w, navH).setDepth(41);
-      this.add.image(x + w / 2, navCY,             topKey ).setDisplaySize(w, navH).setDepth(42);
+      return [
+        this.add.image(x + w / 2, navCY + shadowOff, shKey  ).setDisplaySize(w, navH).setDepth(40),
+        this.add.image(x + w / 2, navCY,             mainKey).setDisplaySize(w, navH).setDepth(41),
+        this.add.image(x + w / 2, navCY,             topKey ).setDisplaySize(w, navH).setDepth(42),
+      ];
     };
 
     const makeHit = (figX: number, figW: number, cb: () => void) => {
@@ -926,12 +956,29 @@ export class GameScene extends Phaser.Scene {
 
     // ── Hint  (Figma left:645) ────────────────────────────────────
     const hintImgs: Phaser.GameObjects.Image[] = [];
-    drawLayered(645, 162, 'nav_hint_shadow', 'nav_hint_main', 'nav_hint_top');
+    const hintLayers = drawLayered(645, 162, 'nav_hint_shadow', 'nav_hint_main', 'nav_hint_top');
     const hintIcon = this.add.image(0, navCY, 'icon_hint').setDisplaySize(sz(28), sz(34)).setDepth(43);
     hintImgs.push(hintIcon);
-    centerInBtn(p(645 + 81), hintIcon, sz(28), 'Hint');
+    const hintLabel = centerInBtn(p(645 + 81), hintIcon, sz(28), 'Hint');
+    // grey while coins are short (refreshHint); WebGL only - the Canvas renderer fades it instead
+    this.hintParts = [...hintLayers, hintIcon, hintLabel];
+    for (const o of this.hintParts) {
+      const fx = o.preFX?.addColorMatrix();
+      if (!fx) continue;
+      fx.grayscale(1); fx.brightness(0.82, true); fx.active = false;
+      this.hintGrey.push(fx);
+    }
     makeHit(645, 162, () => {
+      // the Hint costs HINT_COST coins. Nothing to show now (between rounds, game over) = no charge.
+      // Too few coins: it does nothing - the button and the coin badge shake "no" (no text).
+      if (this.busy || this.hearts <= 0) return;
+      if (this.coins < HINT_COST) {
+        this.shake(this.hintParts, 0.6);
+        this.shake(this.badgeInfo.coin?.parts ?? []);
+        return;
+      }
       btnPress(hintImgs);
+      this.spend('coin', HINT_COST);
       this.showHint();
     });
 
@@ -1353,6 +1400,22 @@ export class GameScene extends Phaser.Scene {
     this.selectedRight?.shakeBack();
     this.selectedLeft  = undefined;
     this.selectedRight = undefined;
+
+    // a wrong pair costs a heart; with none left the game ends (never below 0)
+    if (this.hearts > 0) {
+      this.spend('heart', 1);
+      if (this.hearts <= 0) this.outOfHearts();
+    }
+  }
+
+  /** No hearts left: the game ends - the result screen with what was collected so far (stars, coins, gems and the
+   *  Compound Book cards stay). A moment first to see the last heart go; the cards fade out under it. */
+  private outOfHearts() {
+    this.busy = true;
+    this.time.delayedCall(1100, () => {
+      [...this.leftCards, ...this.rightCards].forEach(c => { if (c?.active) this.tweens.add({ targets: c, alpha: 0, duration: 260 }); });
+      this.showFinale();
+    });
   }
 
   // ── Collision sequence ────────────────────────────────────────────
@@ -1765,6 +1828,126 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: txt, scaleX: 1.5, scaleY: 1.5, duration: 160, ease: 'Back.easeOut', yoyo: true });
   }
 
+  /** −n on a HUD badge (a wrong pair: a heart; the Hint: coins). The number drops, a dark "−n" chip (the reward's
+   *  "+N" chip look) pops under the badge, and a lost heart hops off the badge and falls away. */
+  private spend(kind: 'heart' | 'coin', n: number) {
+    const txt = kind === 'heart' ? this.heartText : this.coinText;
+    if (kind === 'heart') this.hearts = Math.max(0, this.hearts - n);
+    else { const paid = Math.min(n, this.coins); this.coins -= paid; this.coinsSpent += paid; }
+    txt.setText(`${kind === 'heart' ? this.hearts : this.coins}`);
+    this.bumpBadge(txt);
+    const b = this.badgeInfo[kind];
+    if (!b) return;
+    const k = b.k;
+    // the chip
+    const chip = this.add.container(b.cx, b.bottom + Math.round(26 * k)).setDepth(60).setScale(0);
+    const isz = Math.round(30 * k);
+    const ic = this.add.image(0, 0, b.icon).setDisplaySize(isz, isz);
+    const t = this.add.text(0, 0, `−${n}`, {
+      fontFamily: '"Baloo 2", "Inter", sans-serif', fontSize: `${Math.round(22 * k)}px`, color: '#FFFFFF', fontStyle: 'bold',
+      shadow: { offsetX: 0, offsetY: 2, color: '#000000', blur: 4, fill: true },
+    }).setOrigin(0, 0.5);
+    const gap = Math.round(6 * k), padX = Math.round(14 * k);
+    const cw = padX * 2 + isz + gap + t.width, ch = Math.round(38 * k);
+    ic.setX(-cw / 2 + padX + isz / 2);
+    t.setX(ic.x + isz / 2 + gap);
+    const bg = this.add.graphics();
+    bg.fillStyle(0x1B1747, 0.82); bg.fillRoundedRect(-cw / 2, -ch / 2, cw, ch, ch / 2);
+    bg.lineStyle(Math.max(1.5, 2 * k), 0xFFFFFF, 0.2); bg.strokeRoundedRect(-cw / 2, -ch / 2, cw, ch, ch / 2);
+    chip.add([bg, ic, t]);
+    this.tweens.add({ targets: chip, scale: 1, duration: 260, ease: 'Back.easeOut' });
+    this.tweens.add({ targets: chip, alpha: 0, y: chip.y + 10 * k, delay: 1000, duration: 320, onComplete: () => chip.destroy() });
+    if (kind !== 'heart') return;
+    // the heart hops off the badge and falls away; the badge's heart empties for a moment (stays empty at 0)
+    const h = this.add.image(b.ix, b.iy, 'icon_heart').setDisplaySize(b.isz, b.isz).setDepth(61);
+    const sx = h.scaleX;
+    this.tweens.add({
+      targets: h, y: b.iy - 16 * k, scale: sx * 1.3, duration: 200, ease: 'Quad.easeOut',
+      onComplete: () => this.tweens.add({
+        targets: h, x: b.ix - 30 * k, y: b.iy + 110 * k, angle: -40, alpha: 0, scale: sx * 0.8,
+        duration: 620, ease: 'Quad.easeIn', onComplete: () => h.destroy(),
+      }),
+    });
+    this.heartIcon.setTexture('icon_heart_empty');
+    if (this.hearts > 0) this.time.delayedCall(520, () => { if (this.heartIcon?.active) this.heartIcon.setTexture('icon_heart'); });
+    this.shake(b.parts, 0.6);
+  }
+
+  /** a short sideways "no" shake of a group of HUD pieces (one at a time per group) */
+  private shake(parts: { x: number }[], amp = 1) {
+    if (!parts.length || this.shaking.has(parts)) return;
+    this.shaking.add(parts);
+    const xs = parts.map(o => o.x);
+    const d = Math.round(7 * Math.min(this.gw / 1280, this.gh / 720) * amp);
+    this.tweens.addCounter({
+      from: 0, to: 1, duration: 420,
+      onUpdate: tw => { const v = tw.getValue() ?? 0; parts.forEach((o, i) => { o.x = xs[i] + Math.sin(v * Math.PI * 6) * d * (1 - v); }); },
+      onComplete: () => { parts.forEach((o, i) => { o.x = xs[i]; }); this.shaking.delete(parts); },
+    });
+  }
+
+  /** the Hint button looks off (grey) while there are fewer coins than it costs */
+  private refreshHint() {
+    const off = this.coins < HINT_COST;
+    if (off === this.hintOff || !this.hintParts.length) return;
+    this.hintOff = off;
+    if (this.hintGrey.length) this.hintGrey.forEach(fx => { fx.active = off; });
+    else this.hintParts.forEach(o => o.setAlpha(off ? 0.5 : 1));
+  }
+
+  /** the Heart badge icon, drawn in the look of the star / coin / gem icons (a darker rim, a glossy body, a white
+   *  shine), and its empty twin for a lost heart. Same canvas size, so they swap without resizing. */
+  private makeHeartIcons() {
+    const S = 256;
+    const path = (ctx: CanvasRenderingContext2D, k: number) => {
+      const u = (S * 0.92 / 100) * k, ox = S / 2 - 50 * u, oy = S / 2 - 46 * u;   // a chunky heart in a 100 x 92 box
+      const c = (a: number, b: number, c2: number, d: number, e: number, f: number) =>
+        ctx.bezierCurveTo(ox + a * u, oy + b * u, ox + c2 * u, oy + d * u, ox + e * u, oy + f * u);
+      ctx.beginPath();
+      ctx.moveTo(ox + 50 * u, oy + 92 * u);
+      c(20, 72, 1, 54, 1, 31);
+      c(1, 12, 15, 1, 30, 1);
+      c(40, 1, 47, 7, 50, 17);
+      c(53, 7, 60, 1, 70, 1);
+      c(85, 1, 99, 12, 99, 31);
+      c(99, 54, 80, 72, 50, 92);
+      ctx.closePath();
+    };
+    const draw = (key: string, full: boolean) => {
+      if (this.textures.exists(key)) return;
+      const tex = this.textures.createCanvas(key, S, S);
+      if (!tex) return;
+      const ctx = tex.getContext();
+      const lin = (stops: [number, string][]) => {
+        const g = ctx.createLinearGradient(0, S * 0.06, 0, S * 0.94);
+        stops.forEach(([o, col]) => g.addColorStop(o, col));
+        return g;
+      };
+      path(ctx, 1);
+      ctx.fillStyle = lin(full ? [[0, '#FF5C84'], [1, '#B80F3C']] : [[0, '#A598C2'], [1, '#6C5F92']]);
+      ctx.fill();
+      path(ctx, 0.84);
+      ctx.fillStyle = lin(full ? [[0, '#FFA3BA'], [0.45, '#FF4F7D'], [1, '#EE2A5A']] : [[0, '#6F6494'], [1, '#4A3F6E']]);
+      ctx.fill();
+      // shine on the left lobe + a small glint
+      ctx.save();
+      ctx.translate(S * 0.33, S * 0.31);
+      ctx.rotate(-0.62);
+      const rg = ctx.createRadialGradient(0, 0, 0, 0, 0, S * 0.12);
+      rg.addColorStop(0, `rgba(255,255,255,${full ? 0.95 : 0.35})`);
+      rg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = rg;
+      ctx.scale(1, 0.55);
+      ctx.beginPath(); ctx.arc(0, 0, S * 0.12, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = `rgba(255,255,255,${full ? 0.8 : 0.3})`;
+      ctx.beginPath(); ctx.arc(S * 0.22, S * 0.44, S * 0.025, 0, Math.PI * 2); ctx.fill();
+      tex.refresh();
+    };
+    draw('icon_heart', true);
+    draw('icon_heart_empty', false);
+  }
+
   // Roll the badge number up in place from `from` to `to`
   private countUp(txt: Phaser.GameObjects.Text, from: number, to: number) {
     const o = { v: from };
@@ -1987,7 +2170,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ── 재화 정책 안내 모달 (+ 버튼 클릭 시) ──────────────────────────
-  private showCurrencyInfo(kind: 'score' | 'coin' | 'gem') {
+  private showCurrencyInfo(kind: 'heart' | 'score' | 'coin' | 'gem') {
     if (this.infoOpen) return;
     this.infoOpen = true;
 
@@ -1996,15 +2179,18 @@ export class GameScene extends Phaser.Scene {
     const CX = Math.round(GW / 2), CY = Math.round(GH / 2);
 
     const rows: { kind: string; icon: string; name: string; color: number; earn: string; spend: string }[] = [
+      { kind: 'heart', icon: 'icon_heart', name: 'Heart', color: 0xE8335A,
+        earn: `You start with ${HEARTS} hearts`,
+        spend: 'A wrong pair: −1  ·  No hearts left: the game ends (you keep what you got)' },
       { kind: 'score', icon: 'icon_star',  name: 'Star',   color: 0xF5B301,
-        earn: 'Right answer: +10  ·  Right on the first try: bonus!',
-        spend: 'A hint: −5  ·  100 stars → 1 coin' },
+        earn: 'Make a word: +10',
+        spend: 'Yours to keep' },
       { kind: 'coin',  icon: 'icon_money', name: 'Coin',  color: 0xE08A00,
-        earn: 'Trade 100 stars  ·  Bonus for a whole set (6 rounds)',
-        spend: '1 coin = 1 more try (keep going!)' },
+        earn: 'Make a word: +15',
+        spend: `A hint: −${HINT_COST}` },
       { kind: 'gem',   icon: 'icon_gem',   name: 'Gem',   color: 0x2E9BE0,
-        earn: 'Finish a set  ·  +1 for a combo (right in a row)',
-        spend: '1 gem = bring a card you don\'t have yet (fill your book!)' },
+        earn: 'Make a word: +3',
+        spend: 'Yours to keep' },
     ];
 
     const layer = this.add.container(0, 0).setDepth(82).setAlpha(0);
@@ -2212,7 +2398,7 @@ export class GameScene extends Phaser.Scene {
     const centerGap = Math.round(bookW * 0.02);
 
     // ── LEFT page: this run's collected word cards (2 × 3) ──────────
-    const made = this.queue.slice(0, ROUNDS).map(p => p.result);
+    const made = this.queue.slice(0, Math.min(this.roundIndex, ROUNDS)).map(p => p.result);
     const lCols = 3, lRows = 2;
     const gL = pageX + pad, gR = -centerGap - pad;
     const cW = (gR - gL) / lCols, cH = (contentBottom - contentTop) / lRows;
