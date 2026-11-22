@@ -69,10 +69,12 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
 - `?fly=1`: 배경 시연 비행. 11초 반복(정지, 왼쪽, 오른쪽, 게이트 쪽으로 들어갔다 나옴). 지금 방식은 `?fly=1`, A안은 `?bg=layers&fly=1`로 비교한다. 들어가는 깊이는 게이트까지의 35%다. 시험 비행에서 37% 정도까지는 그림이 버티고 45%를 넘으면 번졌다. 날아가는 동안 게임 입력은 카메라를 따라가지 않는다.
 
 ## 음성 인식 = phonics-api (파닉스 공통 규칙, 2026-11-19 — `../phonics-kit`)
-- 게임의 Mic 버튼(두 단어를 말하면 카드가 붙음)과 글리의 "Say it with me!"는 모두 `SpeechRecognition`의 글자 결과를 쓴다.
-  `src/gl/apiSR.ts`가 이 인터페이스를 바꿔 끼운다: 설정(톱니) › **발음 인식 서버 키**에 키를 넣은 기기에서는 마이크를 직접 녹음해
-  (150 ms 넘는 소리로 시작, 0.7 s 조용하면 끝) `/v1/speech/transcribe`(회사 계정의 Azure 받아쓰기, 녹음은 저장 안 함)로 보내고 글자를 돌려준다.
-  게임 로직은 그대로. 키가 없거나 오프라인이면 예전처럼 브라우저 인식(구글).
+- 듣기는 모두 게임이 직접 녹음한다(`src/gl/apiSR.ts` recordTake: 150 ms 넘는 소리로 시작, 0.7 s 조용하면 끝).
+  순서: **phonics-api**(설정(톱니) › **발음 인식 서버 키**가 있는 기기, 서버가 답할 때) → **기기 안 whisper**(tiny.en, transformers.js
+  워커 `src/gl/stt.ts`·`sttWorker.ts`, 모델·런타임은 사이트에서 `public/stt/` 약 55 MB) → 판정 불가('nojudge', 보상 없이 넘어감).
+  브라우저 음성 인식(구글로 음성 전송)은 쓰지 않는다(2026-11-22 사용자 결정: 아이 음성은 제3자 서버로 보내지 않음).
+  글리의 질문("Tell me!", "What goes with pan?")은 글자(phonics-api 받아쓰기 또는 whisper), 말하기 차례는 phonics-api 분석 또는
+  whisper 글자의 엄격 규칙(`sayJudge.ts`). 모델은 첫 탭 뒤 백그라운드로 받고, 아직 로딩 중이면 말하기 차례는 최대 8 s 기다린다.
 - 키는 기기마다 한 번(`localStorage.phonics_api_key`), 코드·저장소에 넣지 않는다(공개 repo). 설정 줄의 알약: 초록 "연결됨" / "키 입력".
 - QA: `uv run --with playwright==1.62.0 python tools/qa/api_sr.py [api|device] [base] [out]` — Mic(두 단어 → 카드 들어감) + 글리(합성어 → 칭찬) + 설정 화면.
 - 글리 목소리(426줄) = 회사 phonics-api TTS의 Ana, 예전 edge-tts 설정(높이 +10Hz ≈ ×1.035, 빠르기 -5%)을 ffmpeg로 맞춤 —

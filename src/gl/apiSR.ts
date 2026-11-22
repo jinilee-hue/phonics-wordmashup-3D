@@ -1,21 +1,31 @@
-// SpeechRecognition on the company phonics-api (phonics-kit, the 2026-11-19 rule for every phonics game).
-// The game's Mic button (GameScene.startMic: say the two words → the cards snap) and Glee's "Say it with me!" (tutor.ts
-// Ears) both read TEXT from the browser's SpeechRecognition, which sends the voice to Google. With a phonics-api key on
-// this device (Settings › 발음 인식 서버 키) the same interface is served by phonics-api instead: the mic is recorded
-// here (voice detector: 150 ms over the room's level starts it, 0.7 s of quiet ends it), sent once to
-// /v1/speech/transcribe (Azure speech-to-text on the company account; the server keeps no audio) and the text comes
-// back as one final result — the game's logic stays as it is. No key / offline → the browser's own recogniser, as before.
-// The recorder (recordTake) also serves Glee's say-it turn, which is judged by /v1/speech/analyze instead (sayJudge.ts).
+// The microphone and its text, for every listening moment (phonics-kit rule, user 2026-11-22: phonics-api first, the
+// on-device whisper second; no child's voice goes to a third-party server, so the browser's own recogniser - which
+// sends the voice to Google - is not used at all).
+// recordTake records one utterance here (voice detector: 150 ms over the room's level starts it, 0.7 s of quiet ends it).
+// Glee's questions ("Which two go together? Tell me!", "What goes with pan?": tutor.ts Ears) read its TEXT (hearText):
+// with a phonics-api key on this device (Settings › 발음 인식 서버 키) /v1/speech/transcribe (Azure speech-to-text on the
+// company account; the server keeps no audio), else - or when the server fails - the on-device recogniser (stt.ts).
+// Glee's say-it turn is judged by /v1/speech/analyze instead, with the same device fallback (sayJudge.ts).
 import '../vendor/phonics-api.js';
+import { sttPreload, sttState, sttWhenReady, transcribe } from './stt';
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 const W = window as Any;
-const Native = W.SpeechRecognition || W.webkitSpeechRecognition;
 
 export type Take = { kind: 'speech'; pcm: Float32Array; sr: number } | { kind: 'silence' } | { kind: 'nomic' };
 
 /** how long the microphone may take to open: an unanswered permission prompt = no microphone (nothing can judge) */
 const MIC_WAIT_MS = 15000;
+/** the on-device recogniser is still loading when a take is in: wait this long for it, then nothing judges this take */
+export const MODEL_WAIT_MS = 8000;
+
+let micRefused = false;
+/** the microphone was refused (or its permission prompt went unanswered): nothing listens again in this visit */
+export const micOff = () => micRefused;
+/** something can read the microphone now: phonics-api (a key on this device) or the on-device recogniser when it is
+ *  ready (`loading`: or still loading) */
+export const canHear = (loading = false) =>
+  !micRefused && (!!W.PhonicsAPI?.usable() || sttState() === 'ready' || (loading && sttState() !== 'error'));
 
 /** One utterance from the microphone (voice detector: 150 ms over the room's level starts it, 0.7 s of quiet ends it).
  *  `waitMs`: no voice by then = silence; `capMs`: the whole take ends there; `stop()`: end now (keep what was said).
@@ -35,10 +45,12 @@ export async function recordTake(o: { waitMs?: number; capMs?: number; stop?: ()
       void gum.then(s => s.getTracks().forEach(t => t.stop()), () => {});   // answered later: close it again
       if (got === 'stop') return { kind: 'silence' };
       if (W.__wmLog) console.log('[mic] no answer to the permission prompt in', MIC_WAIT_MS, 'ms');
+      micRefused = true;
       return { kind: 'nomic' };
     }
     stream = got;
   } catch {
+    micRefused = true;
     return { kind: 'nomic' };
   }
   const ctx = new AudioContext();
@@ -82,53 +94,35 @@ export async function recordTake(o: { waitMs?: number; capMs?: number; stop?: ()
   return { kind: 'speech', pcm, sr };
 }
 
-class PhonicsSR {
-  lang = 'en-US'; interimResults = false; maxAlternatives = 1; continuous = false;
-  onresult: ((e: Any) => void) | null = null;
-  onerror: ((e: Any) => void) | null = null;
-  onend: (() => void) | null = null;
-  onstart: (() => void) | null = null;
-  /** tutor.ts waits longer for a final result: the text comes after the recording */
-  readonly phonics = true;
-  private stopReq = false;
-  private abortReq = false;
-  private started = false;
+/** The on-device recogniser's text for a 16 kHz take: waits for the model up to `waitMs` (it loads in the background).
+ *  null = it can't read this take (not ready in time, failed, or `stop()`); '' = no words in it. */
+export async function deviceText(pcm16: Float32Array, waitMs: number, stop?: () => boolean): Promise<string | null> {
+  if (!await sttWhenReady(waitMs, stop) || stop?.()) return null;
+  const r = await transcribe(pcm16);
+  if (W.__wmLog) console.log('[device] transcribe', JSON.stringify(r));
+  // whisper writes sounds it can't read as "[BLANK_AUDIO]", "(music)", "*cough*": not words
+  return r ? r.text.replace(/\[[^\]]*\]|\([^)]*\)|\*[^*]*\*/g, ' ').trim() : null;
+}
 
-  start() { if (this.started) throw new Error('already started'); this.started = true; void this.run(); }
-  stop() { this.stopReq = true; }
-  abort() { this.abortReq = true; this.stopReq = true; }
-
-  private async run() {
-    const take = await recordTake({ waitMs: 8000, capMs: 8000, stop: () => this.stopReq, onStart: () => this.onstart?.() });
-    if (take.kind === 'nomic') { this.onerror?.({ error: 'not-allowed' }); this.onend?.(); return; }
-    if (this.abortReq || take.kind !== 'speech') { this.onend?.(); return; }
-    const { pcm, sr } = take;
-    const PA = W.PhonicsAPI as PhonicsAPIType;
-    const r = await PA.transcribe(PA.encodeWav(await PA.to16k(pcm, sr), 16000), 'en-US', 8000);
+/** One utterance as text: phonics-api /v1/speech/transcribe when this device has a key and the server answers, else
+ *  the on-device recogniser (`modelWaitMs`: how long to wait for it if it is still loading). null = nothing heard, or
+ *  nothing could read it (the caller falls back to touch). */
+export async function hearText(o: { waitMs: number; capMs: number; stop: () => boolean; modelWaitMs?: number }): Promise<string | null> {
+  const take = await recordTake({ waitMs: o.waitMs, capMs: o.capMs, stop: o.stop });
+  if (take.kind !== 'speech' || o.stop()) return null;
+  const PA = W.PhonicsAPI as PhonicsAPIType;
+  const pcm16 = await PA.to16k(take.pcm, take.sr);
+  if (PA.usable()) {
+    const r = await PA.transcribe(PA.encodeWav(pcm16, 16000), 'en-US', 8000);
     const text = r.ok ? String((r.data as Any)?.text || '').trim() : '';
     if (W.__wmLog) console.log('phonics-api transcribe', JSON.stringify({ ok: r.ok, reason: r.reason, text, ms: r.ms }));
-    if (!this.abortReq && text) {
-      const alt = Object.assign([{ transcript: text, confidence: 1 }], { isFinal: true });
-      this.onresult?.({ resultIndex: 0, results: [alt] });
-    }
-    this.onend?.();
+    if (r.ok) return text || null;
   }
+  if (o.stop()) return null;
+  return (await deviceText(pcm16, o.modelWaitMs ?? 0, o.stop)) || null;
 }
 
-/** no recogniser at all (no key and a browser without one) */
-class NoSR {
-  onerror: ((e: Any) => void) | null = null; onend: (() => void) | null = null; onresult = null;
-  lang = ''; interimResults = false; maxAlternatives = 1; continuous = false;
-  start() { setTimeout(() => { this.onerror?.({ error: 'service-not-allowed' }); this.onend?.(); }, 0); }
-  stop() { /* nothing */ } abort() { /* nothing */ }
-}
-
-/** `new SpeechRecognition()` picks the recogniser when it is made: phonics-api with a key, else the browser's */
-function HybridSR(this: Any) {
-  const PA = W.PhonicsAPI as PhonicsAPIType | undefined;
-  if (PA && PA.usable()) return new PhonicsSR();
-  return Native ? new Native() : new NoSR();
-}
-W.SpeechRecognition = W.webkitSpeechRecognition = HybridSR;
+// the on-device recogniser loads in the background from the first tap or key (the intro and title go on as they are)
+for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { if (sttState() === 'off') sttPreload(); }, { once: true, capture: true, passive: true });
 W.__wmLog = new URLSearchParams(location.search).has('log');
 void W.PhonicsAPI?.init();

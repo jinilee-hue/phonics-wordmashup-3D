@@ -3,25 +3,28 @@
 //   1. phonics-api (this device has a key): one take from the microphone -> /v1/speech/analyze (the sounds it HEARD) ->
 //      PhonicsAPI.judge against the compound's expected sounds, with its two parts as the rivals: "pan" alone, or "cake"
 //      alone, is heard (almost) exactly as a part and blocks the pass (src/data/phonemes.ts, tools/build_phonemes.py).
-//   2. Otherwise the browser's speech recognition (text): the compound as one word (or its plural), or its two parts
-//      back to back ("pan cake"; a part's exact sound-alike counts: "see shell"). No near spellings.
-//   3. Nothing can judge (no key and no recogniser, the microphone refused, the recogniser fails): 'nojudge' - the turn
-//      is skipped without a reward (rule 5: "넘어가되 보상 없음").
+//   2. Otherwise (no key, or the server failed on this take) the on-device recogniser reads the same take (whisper
+//      tiny.en in a worker, stt.ts; it may wait up to MODEL_WAIT_MS for the model) and its text is judged strictly: the
+//      compound as one word (or its plural), or its two parts back to back ("pan cake"; a part's exact sound-alike
+//      counts: "see shell"). No near spellings, never any sound. (user 2026-11-22: no child's voice to a third party)
+//   3. Nothing can judge (the microphone refused, the recogniser can't load or isn't ready in time): 'nojudge' - the
+//      turn is skipped without a reward (rule 5: "넘어가되 보상 없음").
 import '../vendor/phonics-api.js';
 import { PHONEMES } from '../data/phonemes';
-import { recordTake } from './apiSR';
+import { canHear, deviceText, micOff, MODEL_WAIT_MS, recordTake } from './apiSR';
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 export type Pair = { word1: string; word2: string; result: string };
-/** ok = said it · miss = said something else · silence = nothing · retry = the server failed on this take (ask once
- *  more: the browser's recogniser takes over) · nojudge = nothing can judge · aborted = the turn was left (JUMP) */
-export type SayVerdict = 'ok' | 'miss' | 'silence' | 'retry' | 'nojudge' | 'aborted';
+/** ok = said it · miss = said something else · silence = nothing · nojudge = nothing can judge · aborted = the turn
+ *  was left (JUMP) */
+export type SayVerdict = 'ok' | 'miss' | 'silence' | 'nojudge' | 'aborted';
 
 const PA = () => (window as Any).PhonicsAPI as PhonicsAPIType | undefined;
-let micRefused = false;
 
 /** phonics-api can judge this turn (key, server up, analyze on) */
-export const apiReady = () => !micRefused && !!PA()?.usable();
+export const apiReady = () => !micOff() && !!PA()?.usable();
+/** something can judge a say-it turn: phonics-api, or the on-device recogniser (ready or still loading) */
+export const canJudge = () => canHear(true);
 
 /** "pan cake" / "see shell" for seashell: exact sound-alikes of a part only (what a recogniser writes for the same sound) */
 const SOUND_ALIKE: Record<string, string[]> = {
@@ -50,27 +53,40 @@ const note = (e: (typeof sayLog)[number]) => {
   return e.verdict;
 };
 
-/** One take judged by phonics-api. `listening(on)` shows the ear while the microphone is open. */
-export async function hearByApi(p: Pair, o: { waitMs: number; aborted: () => boolean; listening: (on: boolean) => void }): Promise<SayVerdict> {
+/** One take: judged by phonics-api when it can, else by the on-device recogniser (the same take). `listening(on)`
+ *  shows the ear while the microphone is open. */
+export async function hearSay(p: Pair, o: { waitMs: number; aborted: () => boolean; listening: (on: boolean) => void }): Promise<SayVerdict> {
   const api = PA()!;
   o.listening(true);
   const take = await recordTake({ waitMs: o.waitMs, capMs: o.waitMs + 6500, stop: o.aborted });
   o.listening(false);
   if (o.aborted()) return 'aborted';
-  if (take.kind === 'nomic') { micRefused = true; return note({ by: 'mic', verdict: 'nojudge' }); }
-  if (take.kind === 'silence') return note({ by: 'phonics-api', verdict: 'silence' });
-  const call = api.analyze(api.encodeWav(await api.to16k(take.pcm, take.sr), 16000), p.result);
-  // JUMP while the server works: the turn ends at once (the answer is dropped)
-  const gone = new Promise<null>(res => { const k = setInterval(() => { if (o.aborted()) { clearInterval(k); res(null); } }, 50); void call.finally(() => clearInterval(k)); });
-  const r = await Promise.race([call, gone]);
-  if (!r || o.aborted()) return 'aborted';
-  if (!r.ok || !r.data) return note({ by: `phonics-api ${r.reason ?? 'failed'}`, verdict: 'retry', ms: r.ms });
+  if (take.kind === 'nomic') return note({ by: 'mic', verdict: 'nojudge' });
+  if (take.kind === 'silence') return note({ by: apiReady() ? 'phonics-api' : 'device', verdict: 'silence' });
+  const pcm16 = await api.to16k(take.pcm, take.sr);
+  let failed = '';
+  if (apiReady()) {
+    const call = api.analyze(api.encodeWav(pcm16, 16000), p.result);
+    // JUMP while the server works: the turn ends at once (the answer is dropped)
+    const gone = new Promise<null>(res => { const k = setInterval(() => { if (o.aborted()) { clearInterval(k); res(null); } }, 50); void call.finally(() => clearInterval(k)); });
+    const r = await Promise.race([call, gone]);
+    if (!r || o.aborted()) return 'aborted';
+    if (r.ok && r.data) return judgeApi(api, r.data, p, r.ms);
+    failed = `phonics-api ${r.reason ?? 'failed'} -> `;   // the server failed on this take: the device reads it
+  }
+  const text = await deviceText(pcm16, MODEL_WAIT_MS, o.aborted);
+  if (o.aborted()) return 'aborted';
+  return judgeText(p, text, `${failed}device`);
+}
+
+/** phonics-api's analysis of the take, judged against the compound with its two parts as the rivals */
+function judgeApi(api: PhonicsAPIType, data: PhonicsAnalyze, p: Pair, ms?: number): SayVerdict {
   const table: Record<string, string[]> = { ...PHONEMES };
-  if (!table[p.result]?.length && r.data.expected_phonemes?.length) table[p.result] = r.data.expected_phonemes;   // a card added without a rebuild
-  const j = api.judge(r.data, p.result, [p.word1, p.word2], table);
+  if (!table[p.result]?.length && data.expected_phonemes?.length) table[p.result] = data.expected_phonemes;   // a card added without a rebuild
+  const j = api.judge(data, p.result, [p.word1, p.word2], table);
   let verdict: SayVerdict = j.verdict === 'ok' ? 'ok' : j.verdict === 'silence' ? 'silence' : 'miss', by = 'phonics-api';
-  if (verdict === 'miss' && wholeHeard(api, r.data, p, table)) { verdict = 'ok'; by = 'phonics-api (both parts)'; }
-  return note({ by, verdict, heard: j.heard, d: j.d, ms: r.ms });
+  if (verdict === 'miss' && wholeHeard(api, data, p, table)) { verdict = 'ok'; by = 'phonics-api (both parts)'; }
+  return note({ by, verdict, heard: j.heard, d: j.d, ms });
 }
 
 /** The kit's judge takes "f uh t b aa" (football with a soft end l) for the part "foot" said alone: sounds after a word
@@ -107,9 +123,9 @@ function alone(api: PhonicsAPIType, h: string[], e: string[]) {
   return prev[e.length];
 }
 
-/** A browser-recogniser result (texts, or null = nothing heard; `failed` = it could not run) judged strictly. */
-export function judgeText(p: Pair, texts: string[] | null, failed: boolean): SayVerdict {
-  if (failed) return note({ by: 'browser', verdict: 'nojudge' });
-  if (!texts || !texts.some(t => t.trim())) return note({ by: 'browser', verdict: 'silence' });
-  return note({ by: 'browser', verdict: saidCompound(texts, p) ? 'ok' : 'miss', heard: texts.join(' | ') });
+/** The on-device recogniser's text (null = it could not read the take: not ready in time / failed) judged strictly. */
+export function judgeText(p: Pair, text: string | null, by: string): SayVerdict {
+  if (text == null) return note({ by, verdict: 'nojudge' });
+  if (!text) return note({ by, verdict: 'silence' });
+  return note({ by, verdict: saidCompound([text], p) ? 'ok' : 'miss', heard: text });
 }

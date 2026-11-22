@@ -1,7 +1,8 @@
 // Glee leads the game and talks with the child (user request: "튜터가 게임을 이끌어가게 해줘. 아이와 실시간
 // 대화하면서 하는거 처럼"). Agreed with the user: short English lines, voice only (no speech bubbles; an ear icon
-// shows while she listens), and she listens with the browser's speech recognition (like the game's own Mic
-// button) - the microphone opens by itself when she asks something. No AI chat: fixed lines and fixed answers.
+// shows while she listens), and she listens through phonics-api, else the on-device recogniser (apiSR.ts; never the
+// browser's own, which sends the voice to Google) - the microphone opens by itself when she asks something. No AI chat:
+// fixed lines and fixed answers.
 //
 // One speaker at a time: she never listens while she talks, and the child's actions cut her short
 // (grab a card -> she stops and reads that card). Priorities: 0 poke/spin < 1 round intro, idle help
@@ -26,7 +27,8 @@ import type { Glee } from './glee';
 import { GLEE_VOICE, type VoiceLine } from './gleeVoice';
 import type { JumpButton } from './jump';
 import { lang } from './lang';
-import { apiReady, hearByApi, judgeText, saidCompound, type SayVerdict } from './sayJudge';
+import { canHear, hearText } from './apiSR';
+import { apiReady, canJudge, hearSay, type SayVerdict } from './sayJudge';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any;
@@ -180,68 +182,29 @@ class Voice {
   }
 }
 
-/** The browser's speech recognition (en-US), one short session at a time. */
+/** Glee's ears: one utterance from the microphone as text (apiSR.hearText: phonics-api, else the on-device recogniser),
+ *  one at a time. Only when something can read it right now: while the on-device model still loads she does not
+ *  listen, and the child answers with the cards (as when nothing is heard). */
 class Ears {
-  private rec: Any = null;
-  private done: ((h: string[] | null) => void) | null = null;
-  denied = false;
-  /** the last session's error, if it could not listen at all (no-speech / aborted are normal endings) */
-  failed = false;
-  get SR(): Any { return (window as Any).SpeechRecognition || (window as Any).webkitSpeechRecognition; }
-  get available() { return !!this.SR && !this.denied; }
-  get on() { return !!this.rec; }
+  private done: (() => void) | null = null;
+  get available() { return canHear(); }
+  get on() { return !!this.done; }
 
-  /** Listen for up to `ms`; `enough(texts)` = true ends early (an interim result is enough). */
-  listen(ms: number, enough: (texts: string[]) => boolean): Promise<string[] | null> {
+  /** Listen for up to `ms` (no voice by then = nothing heard); stop() ends it at once with nothing. */
+  async listen(ms: number): Promise<string[] | null> {
     this.stop();
-    const SR = this.SR;
-    this.failed = false;
-    if (!SR || this.denied) { this.failed = true; return Promise.resolve(null); }
-    return new Promise(res => {
-      let last: string[] | null = null, settled = false;
-      const finish = (h: string[] | null) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer); clearTimeout(hard);
-        if (this.rec === rec) { this.rec = null; this.done = null; }
-        try { rec.abort(); } catch { /* ended */ }
-        res(h);
-      };
-      const rec = new SR();
-      this.rec = rec;
-      this.done = finish;
-      rec.lang = 'en-US';
-      rec.interimResults = true;
-      rec.maxAlternatives = 5;
-      rec.continuous = false;
-      rec.onresult = (e: Any) => {
-        const texts: string[] = [];
-        let joined = '';
-        for (let i = 0; i < e.results.length; i++) {
-          const r = e.results[i];
-          for (let k = 0; k < r.length; k++) if (r[k]?.transcript) texts.push(r[k].transcript);
-          joined += ` ${r[0]?.transcript ?? ''}`;
-        }
-        if (e.results.length > 1) texts.push(joined);
-        last = texts;
-        if (enough(texts)) finish(texts);
-      };
-      rec.onerror = (e: Any) => {
-        if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed' || e?.error === 'audio-capture') this.denied = true;
-        if (e?.error && e.error !== 'no-speech' && e.error !== 'aborted') this.failed = true;
-      };
-      rec.onend = () => finish(last);
-      const timer = setTimeout(() => { try { rec.stop(); } catch { /* ended */ } }, ms);
-      const hard = setTimeout(() => finish(last), ms + (rec.phonics ? 7000 : 1500));   // phonics-api: the text comes after the recording (gl/apiSR.ts)
-      try { rec.start(); } catch { this.failed = true; finish(null); }
-    });
+    let stopped = false;
+    const me = () => { stopped = true; };
+    this.done = me;
+    const text = await hearText({ waitMs: ms, capMs: ms + 3000, stop: () => stopped || this.done !== me });
+    if (this.done === me) this.done = null;
+    return stopped || !text ? null : [text];
   }
 
   stop() {
     const d = this.done;
     this.done = null;
-    if (d) d(null);
-    this.rec = null;
+    d?.();
   }
 }
 
@@ -336,12 +299,12 @@ export class Tutor {
     return new Promise<boolean>(res => setTimeout(() => res(!j.cancelled), s * 1000));
   }
 
-  /** Open the microphone (ear icon, hand at the ear) until `enough` or `ms`. */
-  private async listen(j: Job, ms: number, enough: (texts: string[]) => boolean) {
+  /** Open the microphone (ear icon, hand at the ear) for one answer (no voice within `ms` = nothing). */
+  private async listen(j: Job, ms: number) {
     if (j.cancelled || !this.ears.available || this.scene?.micRecognition) return null;
     this.glee.mode = 'listen';
     this.log('listen');
-    const h = await this.ears.listen(ms, enough);
+    const h = await this.ears.listen(ms);
     if (this.job === j) this.glee.mode = null;
     this.log('heard', h ? h.join(' | ') : '-');
     return j.cancelled ? null : h;
@@ -443,7 +406,7 @@ export class Tutor {
    *  asks for its partner; something else -> "Hmm, not quite!" and help */
   private async converse(j: Job, pair: Pair, ms: number) {
     const board = (side: 'L' | 'R') => this.cards(side).filter(c => !c.inZone).map(c => c.word as string);
-    const h = await this.listen(j, ms, t => heardCompound(t, pair) || [...board('L'), ...board('R')].some(w => heardWord(t, w)));
+    const h = await this.listen(j, ms);
     if (!h || j.cancelled || this.scene?.busy) return;                  // silence: the child is playing with the cards
     if (heardCompound(h, pair)) {
       if (!await this.say(j, ['yes', `r_${pair.result}`], id => { if (id === 'yes') this.glee.react('snap'); })) return;
@@ -466,7 +429,7 @@ export class Tutor {
     if (!await this.say(j, [`wg_${w}`], () => { this.glee.mode = 'ask'; if (col) this.glee.pointAt([col], lineOf(`wg_${w}`)!.dur + 0.4); })) return;
     const partner = side === 'R' ? pair.word2 : pair.word1;
     const words = this.cards(side).filter(c => !c.inZone).map(c => c.word as string);
-    const h = await this.listen(j, 5000, t => heardCompound(t, pair) || words.some(x => heardWord(t, x)));
+    const h = await this.listen(j, 5000);
     if (!h || j.cancelled || this.scene?.busy) return;
     const target = heardCompound(h, pair) ? partner : words.find(x => heardWord(h, x));
     if (!target) { await this.guideMiss(j, pair); return; }
@@ -518,7 +481,7 @@ export class Tutor {
       if (!await this.say(j, [`wg_${w}`], () => { this.glee.mode = 'ask'; })) return;
       const side: 'L' | 'R' = left ? 'R' : 'L';
       const words = this.cards(side).filter(c => !c.inZone).map(c => c.word as string);
-      const h = await this.listen(j, 5000, t => heardCompound(t, pair) || words.some(x => heardWord(t, x)));
+      const h = await this.listen(j, 5000);
       if (!h || j.cancelled || s.busy) return;
       const target = heardCompound(h, pair) ? (left ? pair.word2 : pair.word1) : words.find(x => heardWord(h, x));
       const c = target ? this.card(target, side) : null;
@@ -632,7 +595,7 @@ export class Tutor {
    *  try!"), 'quiet' (silent twice: she read it again in between - about 20 s in all), 'nojudge' (nothing can judge:
    *  the turn is skipped) or 'cut'. Phonics Match's sayItTurn is the model. */
   private async sayTurn(j: Job, pair: Pair): Promise<SayEnd> {
-    if (!apiReady() && !this.ears.available) return 'nojudge';
+    if (!canJudge()) return 'nojudge';
     let jumped = false;
     // the turn's own job: JUMP ends the line or the listening at once, the match job goes on (go line, release)
     const t: Job = { prio: j.prio, name: 'sayturn', get cancelled() { return j.cancelled || jumped; }, set cancelled(_v: boolean) { /* via j / jumped */ } };
@@ -641,7 +604,7 @@ export class Tutor {
       jb.onJump = () => { if (jumped) return; jumped = true; this.log('jump'); this.voice.stop(); this.ears.stop(); };
       jb.show();
     }
-    let misses = 0, quiet = 0, retried = false;
+    let misses = 0, quiet = 0;
     let prompt = [`say_${pair.result}`];
     try {
       for (let k = 0; k < 8; k++) {
@@ -651,12 +614,7 @@ export class Tutor {
         if (t.cancelled) break;
         if (v === 'ok') return 'ok';
         if (v === 'nojudge') return 'nojudge';
-        if (v === 'retry') {
-          // the server failed on this take: once more, and the browser's recogniser listens (the kit rests the server)
-          if (retried || !this.ears.available) return 'nojudge';
-          retried = true;
-          prompt = [`r_${pair.result}`, 'yourturn'];
-        } else if (v === 'miss') {
+        if (v === 'miss') {
           if (++misses >= 2) { await this.say(t, ['nice2', `r_${pair.result}`]); return t.cancelled && jumped ? 'jump' : 'tries'; }   // "Good try! Pancake!"
           // "Listen! Pan! Cake! Pancake! Your turn!"
           prompt = ['listenup', `w_${pair.word1}`, `w_${pair.word2}`, `r_${pair.result}`, 'yourturn'];
@@ -674,25 +632,14 @@ export class Tutor {
     }
   }
 
-  /** one listen of the say-it turn: phonics-api (analyze + judge) when it can, else the browser's recogniser */
+  /** one listen of the say-it turn: phonics-api (analyze + judge) when it can, else the on-device recogniser */
   private async hear(t: Job, pair: Pair, ms: number): Promise<SayVerdict> {
     if (t.cancelled) return 'aborted';
-    if (apiReady()) {
-      const v = await hearByApi(pair, {
-        waitMs: ms, aborted: () => t.cancelled,
-        listening: on => { this.glee.mode = on ? 'listen' : null; this.log(on ? 'listen' : 'heard', on ? undefined : 'phonics-api'); },
-      });
-      if (v === 'nojudge') this.ears.denied = true;   // the microphone was refused: the browser's recogniser can't hear either
-      return v;
-    }
-    if (!this.ears.available) return 'nojudge';
-    this.glee.mode = 'listen';
-    this.log('listen');
-    const h = await this.ears.listen(ms, txt => saidCompound(txt, pair));
-    this.glee.mode = null;
-    this.log('heard', h ? h.join(' | ') : '-');
-    if (t.cancelled) return 'aborted';
-    return judgeText(pair, h, this.ears.failed);
+    const by = apiReady() ? 'phonics-api' : 'device';
+    return hearSay(pair, {
+      waitMs: ms, aborted: () => t.cancelled,
+      listening: on => { this.glee.mode = on ? 'listen' : null; this.log(on ? 'listen' : 'heard', on ? undefined : by); },
+    });
   }
 
   /** the first quiet turn of a game: Glee points at the JUMP button while the white glove taps it twice and she says
