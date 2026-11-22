@@ -849,6 +849,15 @@ export class Tutor {
     this.run(3, 'finale', async j => { await this.say(j, ['end1', 'end2']); });
   }
 
+  /** a Compound Book card opened with gems: she says its word (its r_ line). It cuts her finale cheer, never a say-it
+   *  turn or the explanation (she stays quiet then). false = no tutor here (GameScene plays the clip itself). */
+  sayWord(result: string) {
+    const id = `r_${result}`;
+    if (!this.enabled || !this.scene || !lineOf(id)) return false;
+    this.run(this.job?.name === 'finale' ? 3 : 2, `book:${result}`, async j => { await this.say(j, [id]); });
+    return true;
+  }
+
   /** the game ended early (no hearts left): stop talking and listening, no more help */
   stop() { this.cancel(); }
 

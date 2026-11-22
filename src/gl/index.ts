@@ -269,6 +269,16 @@ function attach(scene: Any) {
     (wrapped as Any).__wm3d = true;
     scene.showToast = wrapped;
   }
+  // a Compound Book card opened with gems: Glee says its word (one voice at a time), else GameScene plays the clip
+  const word = scene.playWordClip;
+  if (typeof word === 'function' && !word.__wm3d) {
+    const wrapped = function (this: Any, r: string) {
+      if (state.on && state.tutor?.sayWord(r)) return;
+      return word.call(scene, r);
+    };
+    (wrapped as Any).__wm3d = true;
+    scene.playWordClip = wrapped;
+  }
   wrapOnce(scene, 'onWrongMatch', () => { state.glee?.react('wrong'); state.tutor?.onWrong(); });
   wrapOnce(scene, 'triggerCollision', () => {
     state.glee?.react('match');

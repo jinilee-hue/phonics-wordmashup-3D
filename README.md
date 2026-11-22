@@ -28,6 +28,7 @@
 ## 보상
 
 - 이긴 라운드마다 **별 +10 · 코인 +15 · 보석 +3**, 그리고 그 합성어가 Compound Book에 들어가요(localStorage `phonics_collected_v1`).
+- **보석은 기기에 남아요**(localStorage `wm.gems.v1`; 별·코인·하트는 게임마다 새로). Compound Book(위쪽 막대·결과 화면)의 '?' 카드를 누르면 보석 5 가격표, 한 번 더 누르면 보석 5개로 카드가 뒤집혀 열려요(단어 소리, 도감에 들어감). 보석이 모자라면 가격표가 흐리고 보석 배지가 흔들릴 뿐 아무것도 안 써요.
 - 글리가 진행할 때(3D)는 이 보상을 말하기 차례가 끝날 때까지 붙잡아 두고, **단어를 말했을 때만** 줘요(`src/gl/index.ts` `holdForSay`). JUMP · 두 번 틀림 · 두 번 무음 · 판정 불가면 그 단어의 별·코인·보석·도감 카드는 없어요. 라운드 진행 자체는 그대로예요.
 - 2D(`?q=2d`, 느린 기기 폴백)와 `?tutor=off`·`?glee=off`에는 말하기 차례가 없어서 이기면 바로 줘요.
 
@@ -84,8 +85,8 @@
 
 ## 기록
 
-- 게임이 끝나면(6라운드 뒤) 파닉스 게임 공통 기록(localStorage `phonics.progress`)에 `word-mashup` 한 줄: 만든 단어 수, 말하기 통과 수(`said`)·차례 수(`sayTurns`), 별·코인·보석, 시간, 틀린 쌍 수(`src/progress.ts`, phonics-kit `phonics-progress.js` 복사본). 기록만 하고 레벨 선택은 없어요. 2D도 기록해요(말하기 차례 없음).
-- 그 밖의 localStorage: `phonics_collected_v1`(도감), `wm3d-glee-spot-v1`(글리 자리), `wm3d-quality-v2`(자동 품질), `phonics_api_key`.
+- 게임이 끝나면(6라운드 뒤) 파닉스 게임 공통 기록(localStorage `phonics.progress`)에 `word-mashup` 한 줄: 만든 단어 수, 말하기 통과 수(`said`)·차례 수(`sayTurns`), 별·코인·그 게임에서 번 보석, 보석으로 연 카드(`gemsSpent`·`cardsOpened`, 결과 화면에서 연 것도 그 줄에 더함), 시간, 틀린 쌍 수(`src/progress.ts`, phonics-kit `phonics-progress.js` 복사본). 기록만 하고 레벨 선택은 없어요. 2D도 기록해요(말하기 차례 없음).
+- 그 밖의 localStorage: `phonics_collected_v1`(도감), `wm.gems.v1`(보석), `wm3d-glee-spot-v1`(글리 자리), `wm3d-quality-v2`(자동 품질), `phonics_api_key`.
 
 ## 도구
 

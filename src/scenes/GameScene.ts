@@ -6,6 +6,7 @@ import { gameAudio } from '../audio';
 const ROUNDS = 6;
 const HEARTS = 3;      // a wrong pair costs one; none left ends the game (user 2026-11-22: a game needs a cost)
 const HINT_COST = 5;   // coins for the Hint button (Glee's own idle help stays free)
+const CARD_GEMS = 5;   // gems to open a '?' card in the Compound Book (user 2026-11-22: what a game collects needs a use)
 
 export class GameScene extends Phaser.Scene {
   // Dynamic screen dimensions — set in create()
@@ -35,9 +36,21 @@ export class GameScene extends Phaser.Scene {
   private roundIndex = 0;
   private score = 0;
   private coins = 0;
-  private gems = 0;
+  /** gems stay on this device from game to game (localStorage GEMS_KEY); stars, coins and hearts are per game */
+  private gemBank = 0;
+  private get gems() { return this.gemBank; }
+  private set gems(v: number) {
+    this.gemBank = Math.max(0, Math.round(v) || 0);
+    try { localStorage.setItem(GameScene.GEMS_KEY, String(this.gemBank)); } catch { /* blocked: this page only */ }
+  }
   private hearts = HEARTS;
   private coinsSpent = 0;
+  /** this game's gems at the start, the gems spent and the '?' cards opened with them (progress.ts records them) */
+  private gemsAtStart = 0;
+  private gemsSpent = 0;
+  private cardsOpened: string[] = [];
+  /** open books that keep the HUD gem badge above them (liftGemBadge) */
+  private gemLifts = 0;
   private heartText!: Phaser.GameObjects.Text;
   private heartIcon!: Phaser.GameObjects.Image;
   /** each HUD badge: its pieces (shaken together) and where the "−n" chip goes */
@@ -77,6 +90,7 @@ export class GameScene extends Phaser.Scene {
   private micWaveTween?: Phaser.Tweens.Tween;
   private micLabel?: Phaser.GameObjects.Text;
   private static readonly COLLECTED_KEY = 'phonics_collected_v1';
+  private static readonly GEMS_KEY = 'wm.gems.v1';
 
   constructor() { super({ key: 'Game' }); }
 
@@ -141,7 +155,11 @@ export class GameScene extends Phaser.Scene {
     this.roundIndex = 0;
     this.score = 0;
     this.coins = 0;
-    this.gems  = 0;
+    this.gemBank = this.loadGems();   // the gems carry over from the last game
+    this.gemsAtStart = this.gemBank;
+    this.gemsSpent = 0;
+    this.cardsOpened = [];
+    this.gemLifts = 0;
     this.hearts = HEARTS;
     this.coinsSpent = 0;
     this.badgeInfo = {};
@@ -462,7 +480,7 @@ export class GameScene extends Phaser.Scene {
       const iconSz = sz(46);
       const icon = this.iconShadow(this.add.image(bx + sz(8) + iconSz / 2, midY, cfg.iconKey).setDisplaySize(iconSz, iconSz).setDepth(53));
 
-      const numTxt = this.add.text(bx + sz(107), midY, cfg.kind === 'heart' ? `${this.hearts}` : '0', {
+      const numTxt = this.add.text(bx + sz(107), midY, cfg.kind === 'heart' ? `${this.hearts}` : cfg.kind === 'gem' ? `${this.gems}` : '0', {
         fontFamily: '"Inter", "Baloo 2"', fontSize: `${sz(22)}px`,
         color: '#FFFFFF', fontStyle: 'bold',
       }).setOrigin(1, 0.5).setDepth(53);
@@ -1202,6 +1220,13 @@ export class GameScene extends Phaser.Scene {
     try { localStorage.setItem(GameScene.COLLECTED_KEY, JSON.stringify([...set])); } catch {}
   }
 
+  private loadGems() {
+    try {
+      const v = parseInt(localStorage.getItem(GameScene.GEMS_KEY) ?? '', 10);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    } catch { return this.gemBank; }   // blocked storage: keep this page's count
+  }
+
   private showToast(msg: string) {
     const { gw: GW, gh: GH } = this;
     const s = Math.min(GW / 1280, GH / 720);
@@ -1828,19 +1853,20 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: txt, scaleX: 1.5, scaleY: 1.5, duration: 160, ease: 'Back.easeOut', yoyo: true });
   }
 
-  /** −n on a HUD badge (a wrong pair: a heart; the Hint: coins). The number drops, a dark "−n" chip (the reward's
-   *  "+N" chip look) pops under the badge, and a lost heart hops off the badge and falls away. */
-  private spend(kind: 'heart' | 'coin', n: number) {
-    const txt = kind === 'heart' ? this.heartText : this.coinText;
+  /** −n on a HUD badge (a wrong pair: a heart; the Hint: coins; a Compound Book card: gems). The number drops, a dark
+   *  "−n" chip (the reward's "+N" chip look) pops under the badge, and a lost heart hops off the badge and falls away. */
+  private spend(kind: 'heart' | 'coin' | 'gem', n: number) {
+    const txt = kind === 'heart' ? this.heartText : kind === 'coin' ? this.coinText : this.gemText;
     if (kind === 'heart') this.hearts = Math.max(0, this.hearts - n);
-    else { const paid = Math.min(n, this.coins); this.coins -= paid; this.coinsSpent += paid; }
-    txt.setText(`${kind === 'heart' ? this.hearts : this.coins}`);
+    else if (kind === 'coin') { const paid = Math.min(n, this.coins); this.coins -= paid; this.coinsSpent += paid; }
+    else { const paid = Math.min(n, this.gems); this.gems -= paid; this.gemsSpent += paid; }
+    txt.setText(`${kind === 'heart' ? this.hearts : kind === 'coin' ? this.coins : this.gems}`);
     this.bumpBadge(txt);
     const b = this.badgeInfo[kind];
     if (!b) return;
     const k = b.k;
     // the chip
-    const chip = this.add.container(b.cx, b.bottom + Math.round(26 * k)).setDepth(60).setScale(0);
+    const chip = this.add.container(b.cx, b.bottom + Math.round(26 * k)).setDepth(kind === 'gem' && this.gemLifts > 0 ? 96 : 60).setScale(0);
     const isz = Math.round(30 * k);
     const ic = this.add.image(0, 0, b.icon).setDisplaySize(isz, isz);
     const t = this.add.text(0, 0, `−${n}`, {
@@ -1893,6 +1919,113 @@ export class GameScene extends Phaser.Scene {
     this.hintOff = off;
     if (this.hintGrey.length) this.hintGrey.forEach(fx => { fx.active = off; });
     else this.hintParts.forEach(o => o.setAlpha(off ? 0.5 : 1));
+  }
+
+  /** the HUD gem badge comes up over an open Compound Book (its dim covers the HUD): the gems to spend stay in sight */
+  private liftGemBadge(d: 1 | -1) {
+    const was = this.gemLifts > 0;
+    this.gemLifts = Math.max(0, this.gemLifts + d);
+    const now = this.gemLifts > 0;
+    if (was === now) return;
+    const parts = (this.badgeInfo.gem?.parts ?? []) as unknown as Phaser.GameObjects.Components.Depth[];
+    for (const o of parts) o.setDepth(o.depth + (now ? 40 : -40));
+  }
+
+  /** The '?' cards of one Compound Book (the top bar's or the result screen's). A tap on one shows its price chip
+   *  (the gem + CARD_GEMS); a second tap (on the card or its chip) spends the gems and the card flips open into its
+   *  compound card with its word clip, collected like a made word. Too few gems: the chip is dim and the gem badge
+   *  shakes "no" - nothing is spent (the Hint's rule). */
+  private gemCards(countTxt: Phaser.GameObjects.Text) {
+    let picked: { result: string; chip: Phaser.GameObjects.Container; parts: { x: number }[] } | null = null;
+    const unpick = () => { picked?.chip.destroy(); picked = null; };
+    const add = (parent: Phaser.GameObjects.Container, result: string, x: number, y: number, w: number, h: number,
+      cover: Phaser.GameObjects.GameObject[]) => {
+      const hit = this.add.zone(x, y, w, h).setInteractive({ useHandCursor: true });
+      parent.add(hit);
+      hit.on('pointerdown', () => {
+        const short = this.gems < CARD_GEMS;
+        if (picked?.result !== result) {
+          unpick();
+          const chip = this.priceChip(parent, x, y + h * 0.3, w, short);
+          picked = { result, chip, parts: [chip] };
+          if (short) this.shake(this.badgeInfo.gem?.parts ?? []);
+          return;
+        }
+        if (short) { this.shake(this.badgeInfo.gem?.parts ?? []); this.shake(picked.parts, 0.6); return; }
+        unpick();
+        if (!this.buyCard(result)) return;
+        hit.destroy();
+        countTxt.setText(`${this.getCollected().size} / ${COMPOUND_PAIRS.length}`);
+        this.flipOpen(parent, result, x, y, w, h, cover);
+      });
+    };
+    return { add, unpick };
+  }
+
+  /** the price on a picked '?' card: a dark chip (the "−n" chip look) with the HUD's gem and CARD_GEMS; dim when short */
+  private priceChip(parent: Phaser.GameObjects.Container, x: number, y: number, w: number, short: boolean) {
+    const ch = Math.round(w * 0.3), isz = Math.round(ch * 0.86), padX = Math.round(ch * 0.3), gap = Math.round(ch * 0.12);
+    const ic = this.add.image(0, 0, 'icon_gem').setDisplaySize(isz, isz);
+    const t = this.add.text(0, 0, `${CARD_GEMS}`, {
+      fontFamily: '"Baloo 2", "Inter", sans-serif', fontSize: `${Math.round(ch * 0.62)}px`, color: '#FFFFFF', fontStyle: 'bold',
+    }).setOrigin(0, 0.5);
+    const cw = padX * 2 + isz + gap + t.width;
+    ic.setX(-cw / 2 + padX + isz / 2);
+    t.setX(ic.x + isz / 2 + gap);
+    const bg = this.add.graphics();
+    bg.fillStyle(0x1B1747, 0.88); bg.fillRoundedRect(-cw / 2, -ch / 2, cw, ch, ch / 2);
+    bg.lineStyle(Math.max(1.5, ch * 0.06), 0xFFFFFF, 0.25); bg.strokeRoundedRect(-cw / 2, -ch / 2, cw, ch, ch / 2);
+    const chip = this.add.container(x, y, [bg, ic, t]).setScale(0);
+    if (short) { chip.setAlpha(0.5); ic.setTint(0x9A9AB0); }
+    parent.add(chip);
+    this.tweens.add({ targets: chip, scale: 1, duration: 220, ease: 'Back.easeOut' });
+    return chip;
+  }
+
+  /** CARD_GEMS gems for a Compound Book card: it goes into the book like a made word (progress.ts records it) */
+  private buyCard(result: string) {
+    if (this.gems < CARD_GEMS || this.getCollected().has(result)) return false;
+    this.spend('gem', CARD_GEMS);
+    this.addCollected(result);
+    this.cardsOpened.push(result);
+    return true;
+  }
+
+  /** the bought '?' card turns over into its compound card (the game's card art), with a sparkle and its word clip */
+  private flipOpen(parent: Phaser.GameObjects.Container, result: string, x: number, y: number, w: number, h: number,
+    cover: Phaser.GameObjects.GameObject[]) {
+    const key = `card_${result}`;
+    const face = this.textures.exists(key)
+      ? this.add.image(x, y, key).setDisplaySize(w, h)
+      : this.add.text(x, y, result, {
+        fontFamily: '"Baloo 2"', fontSize: `${Math.round(w * 0.16)}px`, color: '#5A2E94', fontStyle: 'bold',
+        align: 'center', wordWrap: { width: w * 0.85 },
+      }).setOrigin(0.5);
+    const fsx = face.scaleX;
+    face.scaleX = 0;
+    parent.add(face);
+    this.tweens.add({
+      targets: cover, scaleX: 0, duration: 150, ease: 'Quad.easeIn',
+      onComplete: () => {
+        cover.forEach(o => o.destroy());
+        this.tweens.add({ targets: face, scaleX: fsx, duration: 240, ease: 'Back.easeOut' });
+        const at = parent.getWorldTransformMatrix().transformPoint(x, y);
+        const fx = this.add.particles(at.x, at.y, 'pDot', {
+          speed: { min: 80, max: 260 }, angle: { min: 0, max: 360 }, scale: { start: 0.6, end: 0 },
+          alpha: { start: 1, end: 0 }, lifespan: { min: 450, max: 750 }, quantity: 0,
+          tint: [0x8FE3FF, 0xFFFFFF, 0xFFD700], emitting: false,
+        }).setDepth(97);
+        fx.explode(16);
+        this.time.delayedCall(900, () => fx.destroy());
+      },
+    });
+    if (this.sfxOn) gameAudio.playBurst();
+    this.playWordClip(result);
+  }
+
+  /** a word's own clip (Glee's "Pancake!" line, public/gl/voice/r_<word>.mp3); in 3D index.ts has Glee say it */
+  private playWordClip(result: string) {
+    try { void new Audio(`./gl/voice/r_${result}.mp3`).play().catch(() => {}); } catch { /* no audio here */ }
   }
 
   /** the Heart badge icon, drawn in the look of the star / coin / gem icons (a darker rim, a glossy body, a white
@@ -2001,6 +2134,7 @@ export class GameScene extends Phaser.Scene {
   private showCollection() {
     if (this.collectionOpen) return;
     this.collectionOpen = true;
+    this.liftGemBadge(1);
 
     const { gw: GW, gh: GH } = this;
     const s = Math.min(GW / 1280, GH / 720);
@@ -2074,6 +2208,7 @@ export class GameScene extends Phaser.Scene {
     }).setOrigin(0.5);
     book.add([closeG, closeTxt]);
     countTxt.setX(closeX - closeR - Math.round(s * 12));
+    const buy = this.gemCards(countTxt);
 
     // ── 카드 그리드 (전체 페어, 획득=이미지 / 미획득=흐린 ?), 페이지네이션 ──
     const contentTop = pageY + titleH + Math.round(bookH * 0.05);
@@ -2108,15 +2243,19 @@ export class GameScene extends Phaser.Scene {
         if (has && this.textures.exists(key)) {
           pc.add(this.add.image(tx, ty, key).setDisplaySize(cardW, cardH));
         } else if (this.textures.exists(key)) {
-          pc.add(this.add.image(tx, ty, key).setDisplaySize(cardW, cardH).setTint(0x888888).setAlpha(0.4));
-          pc.add(this.add.text(tx, ty, '?', {
+          const im = this.add.image(tx, ty, key).setDisplaySize(cardW, cardH).setTint(0x888888).setAlpha(0.4);
+          const q = this.add.text(tx, ty, '?', {
             fontFamily: '"Baloo 2"', fontSize: `${Math.round(cardH * 0.38)}px`, color: '#FFFFFF', fontStyle: 'bold',
-          }).setOrigin(0.5).setAlpha(0.8));
+          }).setOrigin(0.5).setAlpha(0.8);
+          pc.add([im, q]);
+          buy.add(pc, p.result, tx, ty, cardW, cardH, [im, q]);
         } else {
-          pc.add(this.add.text(tx, ty, has ? p.result : '?', {
+          const t = this.add.text(tx, ty, has ? p.result : '?', {
             fontFamily: '"Baloo 2"', fontSize: `${Math.round(cardW * 0.16)}px`,
             color: has ? '#5A2E94' : '#8A6BB8', fontStyle: 'bold', align: 'center', wordWrap: { width: cardW * 0.85 },
-          }).setOrigin(0.5).setAlpha(has ? 1 : 0.4));
+          }).setOrigin(0.5).setAlpha(has ? 1 : 0.4);
+          pc.add(t);
+          if (!has) buy.add(pc, p.result, tx, ty, cardW, cardH, [t]);
         }
       });
       pages.push(pc);
@@ -2146,6 +2285,7 @@ export class GameScene extends Phaser.Scene {
     const nav = (dir: number) => {
       const np = page + dir;
       if (np < 0 || np >= totalPages) return;
+      buy.unpick();
       pages[page].setVisible(false); page = np; pages[page].setVisible(true);
       drawDots();
       prevBtn.setVisible(page > 0); nextBtn.setVisible(page < totalPages - 1);
@@ -2153,7 +2293,11 @@ export class GameScene extends Phaser.Scene {
     prevBtn.on('pointerdown', () => nav(-1));
     nextBtn.on('pointerdown', () => nav(1));
 
+    let closing = false;
     const close = () => {
+      if (closing) return;
+      closing = true;
+      this.liftGemBadge(-1);
       this.tweens.add({ targets: layer, alpha: 0, duration: 200, onComplete: () => { layer.destroy(); this.collectionOpen = false; } });
     };
     dim.on('pointerdown', close);
@@ -2189,8 +2333,8 @@ export class GameScene extends Phaser.Scene {
         earn: 'Make a word: +15',
         spend: `A hint: −${HINT_COST}` },
       { kind: 'gem',   icon: 'icon_gem',   name: 'Gem',   color: 0x2E9BE0,
-        earn: 'Make a word: +3',
-        spend: 'Yours to keep' },
+        earn: 'Make a word: +3  ·  Gems stay for your next game',
+        spend: `Open a ? card in the Compound Book: −${CARD_GEMS}` },
     ];
 
     const layer = this.add.container(0, 0).setDepth(82).setAlpha(0);
@@ -2347,6 +2491,7 @@ export class GameScene extends Phaser.Scene {
     dim.fillStyle(0x150B33, 0.82);
     dim.fillRect(0, 0, GW, GH);
     this.tweens.add({ targets: dim, alpha: 1, duration: 400 });
+    this.liftGemBadge(1);   // the gems stay in sight: they open the book's '?' cards
 
     // ── Open "Compound Book" (purple themed) ──────────────────────
     const bookW = Math.round(GW * 0.66);
@@ -2455,6 +2600,7 @@ export class GameScene extends Phaser.Scene {
       color: '#8A43D6', fontStyle: 'bold',
     }).setOrigin(1, 0.5);
     book.add(countTxt);
+    const buy = this.gemCards(countTxt);
 
     // Only unobtained cards go on the right page
     const unobtained = COMPOUND_PAIRS.filter(p => !collected.has(p.result));
@@ -2499,6 +2645,7 @@ export class GameScene extends Phaser.Scene {
               shadow: { offsetX: 0, offsetY: 2, color: 'rgba(0,0,0,0.3)', blur: 3, fill: true },
             }).setOrigin(0.5).setAlpha(0.75);
             pgCont.add([im, qTxt]);
+            buy.add(pgCont, p.result, tx, ty, rCardW, rCardH, [im, qTxt]);
           } else {
             // Fallback: grey slot
             const lo = this.add.graphics();
@@ -2509,6 +2656,7 @@ export class GameScene extends Phaser.Scene {
               color: '#8A6BB8', fontStyle: 'bold',
             }).setOrigin(0.5).setAlpha(0.4);
             pgCont.add([lo, lt]);
+            buy.add(pgCont, p.result, tx, ty, rCardW, rCardH, [lo, lt]);
           }
         });
 
@@ -2557,6 +2705,7 @@ export class GameScene extends Phaser.Scene {
       const navigate = (dir: number) => {
         const np = collPage + dir;
         if (np < 0 || np >= totalPages) return;
+        buy.unpick();
         pages[collPage].setVisible(false);
         collPage = np;
         pages[collPage].setVisible(true);
