@@ -23,10 +23,18 @@
 // button on the result card skips it; two wrong tries end it ("Good try!"); quiet -> she reads it again and waits once
 // more (about 20 s in all; on the first quiet turn of a game she shows the JUMP button); nothing can judge -> no turn.
 // Only a said word earns its reward (stars, coins, gems, its Compound Book card: index.ts holds them until then).
+//
+// The explanation (the first game of a visit; user 2026-11-22 "설명 있는게 맞지", as the other phonics games - Puzzle's
+// teachDemo): after "Hi! I'm Glee!" she says "Look! Pick two cards that make one word." and the white glove plays round 1
+// for real - it drags the right left card and the right right card into the zone (GameScene's own drop and check, so they
+// really mash into the compound card; she reads each card as it is picked up, as for a child) - "Pan and cake make...
+// pancake!", the say step shown briefly ("Now say it! Pancake!" and her ear, no microphone), then round 1 is dealt again
+// for the child: "Now you try!". Nothing is paid or recorded for it (index.ts skips GameScene.onRoundWin). SKIP (howto.ts,
+// phonics-kit common rule 1) shows from her first line to the end of the demo and stops her voice and the demo at once.
 import type { Glee } from './glee';
 import { GLEE_VOICE, type VoiceLine } from './gleeVoice';
+import type { HowTo } from './howto';
 import type { JumpButton } from './jump';
-import { lang } from './lang';
 import { canHear, hearText } from './apiSR';
 import { apiReady, canJudge, hearSay, type SayVerdict } from './sayJudge';
 
@@ -49,6 +57,13 @@ export type TutorHooks = {
   said: (round: number, ok: boolean, why: SayEnd) => void;
   /** the JUMP button (shown during the say-it turn) */
   jump: JumpButton | null;
+  /** the explanation's SKIP and white glove (null: no explanation) */
+  howto: HowTo | null;
+  /** the explanation is over: its cards and compound card go and round 1 is dealt again (soft = as after a win; else at
+   *  once, a collision under way dropped) */
+  redeal: (soft: boolean) => void;
+  /** the compound card of the collision under way (null until it shows) */
+  resultCard: () => unknown;
 };
 /** how a say-it turn ended */
 export type SayEnd = 'ok' | 'jump' | 'tries' | 'quiet' | 'nojudge' | 'cut';
@@ -87,15 +102,8 @@ export function heardCompound(texts: string[], p: Pair) {
   });
 }
 
-/** Glee's line in the language picked on the title (gl/lang.ts): the Korean take when there is one, else English (a
- *  card word alone - 'Pan!', 'Pancake!' - has no Korean take) */
-function clip(id: string): { line: VoiceLine; url: string; key: string } | null {
-  const ko = lang.get() === 'ko' ? GLEE_VOICE.lines_ko[id] : undefined;
-  if (ko) return { line: ko, url: `./gl/voice/ko/${id}.mp3`, key: `ko/${id}` };
-  const en = GLEE_VOICE.lines[id];
-  return en ? { line: en, url: `./gl/voice/${id}.mp3`, key: id } : null;
-}
-const lineOf = (id: string) => clip(id)?.line;
+/** Glee's line (English only: Word Mashup has no language choice, user 2026-11-22 "word mashup은 언어 선택 빼줘") */
+const lineOf = (id: string): VoiceLine | undefined => GLEE_VOICE.lines[id];
 
 /** Clips: fetched and decoded once, played through Web Audio with the baked trim and gain. */
 class Voice {
@@ -115,16 +123,15 @@ class Voice {
   }
 
   load(id: string) {
-    const c = clip(id);
-    if (!c) return Promise.resolve(null);
-    let p = this.bufs.get(c.key);
+    if (!lineOf(id)) return Promise.resolve(null);
+    let p = this.bufs.get(id);
     if (!p) {
       // ?v=<voice>: a new voice gets new URLs, so no browser plays a cached clip of the old one (Pages caches 10 min)
-      p = fetch(`${c.url}?v=${GLEE_VOICE.voice}`)
-        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${c.key}: ${r.status}`))))
+      p = fetch(`./gl/voice/${id}.mp3?v=${GLEE_VOICE.voice}`)
+        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${id}: ${r.status}`))))
         .then(b => this.context()!.decodeAudioData(b))
         .catch(err => { console.warn('[tutor] voice', err); return null; });
-      this.bufs.set(c.key, p);
+      this.bufs.set(id, p);
     }
     return p;
   }
@@ -226,6 +233,14 @@ export class Tutor {
   private holdAt = 0;
   private holdWaiters: (() => void)[] = [];
   private placing = false;
+  /** the explanation runs (SKIP shows, the board is the glove's) */
+  teaching = false;
+  /** it ran in this visit: later games go without it */
+  private taught = false;
+  /** the glove has picked up a card (SKIP then deals round 1 again) */
+  private teachTouched = false;
+  /** GameScene.checkMatch's timer for the collision (SKIP in that moment removes it) */
+  private teachTimer: { remove: (dispatch?: boolean) => void; hasDispatched?: boolean } | null = null;
   private bgmK = 1;
   private bgmBase: number | null = null;
   trace: TraceEv[] = [];
@@ -251,6 +266,7 @@ export class Tutor {
     this.placing = false;
     this.jumpTold = false;
     this.hooks.jump?.hide();
+    this.teachOff();                                    // a Replay mid-explanation: the new game has its own board
   }
 
   // ── jobs: one at a time; a more (or equally) important one cuts the current one ──
@@ -385,6 +401,11 @@ export class Tutor {
     const pair = this.pair();
     if (!pair) return;
     this.wrongs = 0; this.idle = 0; this.idleStage = 0;
+    if (r === 0 && !this.greeted && !this.taught && this.hooks.howto) {
+      this.greeted = this.taught = true;
+      this.run(4, 'teach', async j => { await this.teach(j, pair); });
+      return;
+    }
     this.run(1, `round${r}`, async j => {
       if (r === 0 && !this.greeted) {
         this.greeted = true;
@@ -400,6 +421,152 @@ export class Tutor {
       }
       await this.converse(j, pair, 6500);
     });
+  }
+
+  // ── the explanation (first game of a visit) ──
+  /** hi -> the glove's real round 1 -> round 1 dealt again -> "Now you try!" and she listens as in any round. The job
+   *  runs at priority 4 while the glove plays (the card she picks up must not cut it), 1 once the board is the child's. */
+  private async teach(j: Job, pair: Pair) {
+    const s = this.scene, ht = this.hooks.howto!;
+    this.teaching = true;
+    this.teachTouched = false;
+    s.busy = true;                                      // the board waits for the glove (no picking, Hint, Mic)
+    ht.onSkip = () => this.skipTeach();
+    ht.showSkip();
+    this.log('teach');
+    const done = await this.teachSteps(j, pair);
+    if (!this.teaching) return;                         // SKIP gave the board back already (or a Replay made a new one)
+    this.endTeach(!done);                               // done: the compound card leaves, round 1 comes again
+    if (!done || j.cancelled) return;
+    j.prio = 1;                                         // the child's moves cut her again
+    if (!await this.say(j, ['teach_try'])) return;
+    await this.converse(j, pair, 6500);
+  }
+
+  private async teachSteps(j: Job, pair: Pair) {
+    const s = this.scene;
+    if (!await this.say(j, ['hi'], () => this.glee.wave(1.4))) return false;
+    if (!await this.say(j, ['intro'])) return false;
+    const L = this.card(pair.word1, 'L'), R = this.card(pair.word2, 'R');
+    if (!L || !R) return false;
+    const cl = this.column('L'), cr = this.column('R');
+    if (!await this.say(j, ['teach1'], () => { if (cl && cr) this.glee.pointAt([cl, cr], lineOf('teach1')!.dur + 0.3, 0.5); })) return false;
+    if (!await this.demoMove(j, L, 'L')) return false;
+    if (!await this.demoMove(j, R, 'R')) return false;
+    // both in: GameScene's own check after a drop (260 ms) -> the collision -> the compound card
+    if (!await this.wait(j, 0.26)) return false;
+    const time = s.time, delayed = time.delayedCall;
+    time.delayedCall = (...a: Any[]) => { const ev = delayed.apply(time, a); this.teachTimer = ev; return ev; };
+    try { s.checkMatch(); } finally { delete time.delayedCall; }
+    if (!await this.say(j, [`mk_${pair.result}`])) return false;
+    for (let k = 0; k < 160 && !this.hooks.resultCard(); k++) if (!await this.wait(j, 0.05)) return false;
+    if (!await this.wait(j, 0.3)) return false;
+    // the say step, briefly: "Now say it! Pancake!", then her ear for a moment (no microphone, nothing judged)
+    if (!await this.say(j, ['teach_say', `r_${pair.result}`], () => { this.glee.mode = 'ask'; })) return false;
+    this.glee.mode = 'listen';
+    if (!await this.wait(j, 1.4)) return false;
+    this.glee.mode = null;
+    return true;
+  }
+
+  /** The glove comes to `card`, presses it (she reads it, as when a child picks one up), drags it in a little arc to its
+   *  side of the zone and lets go there: GameScene's own drop (selectedLeft / selectedRight + snapToZone + endDrag). */
+  private async demoMove(j: Job, card: Any, side: 'L' | 'R') {
+    const s = this.scene, ht = this.hooks.howto!;
+    const su = Math.min(s.gw / 1280, s.gh / 720), w = 118 * su;
+    const tip = () => ({ x: card.x + 6 * su, y: card.y + 268 * card.baseScale * 0.12 });   // a little below the card's middle
+    const a = tip(), dir = side === 'L' ? -1 : 1;
+    const from = { x: a.x + dir * 40 * su, y: a.y + 150 * su };
+    this.glee.pointAt([{ x: card.x, y: card.y }], 1.2);
+    ht.handAt(from.x, from.y, w);
+    ht.handOn();
+    if (!await this.anim(j, 520, e => {
+      const q = 1 - (1 - e) ** 3;
+      ht.handAt(from.x + (a.x - from.x) * q, from.y + (a.y - from.y) * q, w);
+    })) return false;
+    ht.handAt(a.x, a.y, w, true);
+    this.teachTouched = true;
+    card.startDrag();
+    const read = this.say(j, [`w_${card.word}`]);
+    if (!await this.wait(j, 0.22)) return false;
+    const x0 = card.x, y0 = card.y, x1 = s.cx + (side === 'L' ? -s.snapOff : s.snapOff), y1 = s.cy;
+    if (!await this.anim(j, 1100, e => {
+      const q = e < 0.5 ? 2 * e * e : 1 - (-2 * e + 2) ** 2 / 2;
+      card.x = x0 + (x1 - x0) * q;
+      card.y = y0 + (y1 - y0) * q - Math.sin(Math.PI * q) * 36 * su;
+      const t = tip();
+      ht.handAt(t.x, t.y, w, true);
+    })) return false;
+    // the drop, as GameScene's pointerup in the zone does it
+    s[side === 'L' ? 'selectedLeft' : 'selectedRight'] = card;
+    this.placing = true;
+    try { card.snapToZone(x1, y1); } finally { this.placing = false; }
+    card.endDrag();
+    const b = tip();
+    ht.handAt(b.x, b.y, w);
+    if (!await read || !await this.wait(j, 0.2)) return false;
+    ht.handOff();
+    return this.anim(j, 260, e => ht.handAt(b.x - dir * 30 * su * e, b.y + 90 * su * e, w));
+  }
+
+  /** `step(0..1)` every frame for `ms`; false if the job was cut */
+  private anim(j: Job, ms: number, step: (e: number) => void) {
+    return new Promise<boolean>(res => {
+      const t0 = performance.now();
+      const tick = () => {
+        if (j.cancelled) { res(false); return; }
+        const e = Math.min(1, (performance.now() - t0) / ms);
+        step(e);
+        if (e < 1) requestAnimationFrame(tick); else res(true);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  /** SKIP: her voice and the demo stop at once and the board is the child's - the glove's cards go back to their slots,
+   *  or, once the collision has begun, round 1 is dealt again */
+  skipTeach() {
+    if (!this.teaching) return;
+    this.log('skip');
+    if (this.job?.name === 'teach') this.cancel();
+    this.endTeach(true);
+  }
+
+  /** the explanation is over: SKIP and the glove go; the board goes back to the child */
+  private endTeach(hard: boolean) {
+    if (!this.teaching) return;
+    const touched = this.teachTouched, timer = this.teachTimer;
+    const crashed = !!timer?.hasDispatched;             // GameScene's collision has begun: those cards are going
+    timer?.remove(false);
+    this.teachOff();
+    const s = this.scene;
+    if (!s) return;
+    this.glee.mode = null;
+    this.idle = 0; this.idleStage = 0;
+    if (!touched) { s.busy = false; return; }
+    if (hard && !crashed) { this.putBack(); return; }
+    this.hooks.redeal(!hard);
+  }
+
+  /** SKIP before the collision: the glove's cards go back to their slots (as after a wrong pair) */
+  private putBack() {
+    const s = this.scene;
+    for (const c of [...this.cards('L'), ...this.cards('R')]) {
+      if (!c.inZone && c.depth < 20) continue;
+      if (c.depth >= 20) c.endDrag();
+      c.resetPosition();
+    }
+    s.selectedLeft = undefined;
+    s.selectedRight = undefined;
+    s.busy = false;
+  }
+
+  private teachOff() {
+    this.teaching = false;
+    this.teachTouched = false;
+    this.teachTimer = null;
+    const ht = this.hooks.howto;
+    if (ht) { ht.onSkip = null; ht.hideSkip(); ht.handOff(); }
   }
 
   /** Listen for the answer: the whole word -> she puts the cards in; a card's word -> she puts that card in and
@@ -455,6 +622,7 @@ export class Tutor {
 
   /** the child picked up a card: she reads it (phonics) */
   onGrab(card: Any) {
+    if (this.teaching) return;                          // the glove's card: she reads it herself (demoMove)
     this.idle = 0; this.idleStage = 0;
     const w = card?.word as string;
     if (!w) return;
@@ -467,7 +635,7 @@ export class Tutor {
   /** a card landed in the zone: first one -> "What goes with pan?" and she listens for the partner */
   onSnap(card: Any) {
     this.idle = 0;
-    if (this.placing) return;
+    if (this.placing || this.teaching) return;
     setTimeout(() => this.snapped(card), 0);
   }
 
@@ -557,6 +725,7 @@ export class Tutor {
   /** the pair collided: name the new word as it appears, then the child's say-it turn. Its end is reported once
    *  (hooks.said): only 'ok' pays the word's reward. */
   onMatch() {
+    if (this.teaching) return;                          // the explanation's match: no say-it turn, nothing paid
     const pair = this.pair();
     this.wrongs = 0; this.idle = 0;
     if (!pair) return;
@@ -735,6 +904,7 @@ export class Tutor {
   }
 
   dispose() {
+    this.endTeach(true);
     this.cancel();
     this.hooks.jump?.hide();
     this.releaseHold();

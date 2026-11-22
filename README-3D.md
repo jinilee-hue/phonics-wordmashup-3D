@@ -29,10 +29,11 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
     - 몸 색: 위는 노랑, 아래는 민트(2026-10-27 시안 중 선택). 캐릭터 시트의 핑크·파스텔은 분홍·보라 네온 무대와 섞여 잘 안 보였다. 글리터도 같은 계열로 맞췄다.
     - 테두리 선 없음(검은 외곽선 대신 몸빛 가장자리). 가장자리는 한 픽셀 안을 4개 광선(낮은 품질은 2개)으로 나눠 쏘아 계단 없이 매끄럽게 그린다.
     - 2D 모드(`?q=2d`, 느린 기기 폴백)에는 나오지 않는다.
-  - `src/gl/tutor.ts` — 글리가 말로 게임을 이끈다(말풍선·글자 없이 음성만, 정해진 문장(영어, 또는 인트로에서 고른 한국어) + 음성 인식(아래 phonics-api). 조직 정책상 LLM 대화는 쓰지 않음). 한 번에 한 명만 말하고, 아이가 움직이면 글리가 말을 멈춘다. 듣는 동안은 머리 옆에 민트 귀 아이콘만 보인다(뒤에 배지 없이 배경이 비침, 몸의 민트와 같은 계열).
+  - `src/gl/tutor.ts` — 글리가 말로 게임을 이끈다(말풍선·글자 없이 음성만, 정해진 영어 문장 + 음성 인식(아래 phonics-api). 조직 정책상 LLM 대화는 쓰지 않음). 한 번에 한 명만 말하고, 아이가 움직이면 글리가 말을 멈춘다. 듣는 동안은 머리 옆에 민트 귀 아이콘만 보인다(뒤에 배지 없이 배경이 비침, 몸의 민트와 같은 계열).
+    - 첫 게임 설명(방문마다 첫 게임만, SKIP): 흰 장갑이 1라운드 정답 두 장을 실제로 끌어 넣어 합성어 카드까지 보여 주고, 1라운드를 다시 나눠 준다 — README.md "첫 게임 설명".
     - 라운드: "Which two go together?" → 듣기 → 카드 단어를 말하면 그 카드를 넣고 "What goes with pan?" → 맞으면 "Pan and cake make... pancake!" → "Say it with me!" → 못 알아들으면 "Listen! Pan! Cake! Pancake! Your turn!" → 칭찬 → 다음 판. JUMP·두 번 틀림·무음·보상 규칙은 [README.md](README.md).
     - 오답(글자 토스트 대신 음성): 두 카드를 읽고 "That's not a word!" → 한 장이 맞았으면 "Pan is right!" 하며 그 카드를 다시 넣고 짝을 묻는다. 둘 다 틀리면 1번째 "Let's try again!", 2번째 첫 카드를 보여 주고 넣은 뒤 짝을 묻는다, 3번째 힌트. Mic 버튼의 안내 토스트도 글리 목소리로 바뀐다.
-    - 음성: `tools/build_glee_voice.py`(지금은 파닉스 게임 공통 튜터 목소리, 아래 "음성 인식" 절 끝) → `public/gl/voice/*.mp3`(한국어 `public/gl/voice/ko/*.mp3`), `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다. 파일 주소에 `?v=<목소리>`가 붙어 목소리를 바꾸면 캐시된 옛 목소리가 나오지 않는다.
+    - 음성: `tools/build_glee_voice.py`(지금은 파닉스 게임 공통 튜터 목소리, 아래 "음성 인식" 절 끝) → `public/gl/voice/*.mp3`, `src/gl/gleeVoice.ts`(입 모양·단어 시각). `?tutor=off`면 끈다. 파일 주소에 `?v=<목소리>`가 붙어 목소리를 바꾸면 캐시된 옛 목소리가 나오지 않는다.
       예전 edge-tts 시제품(`en-US-AnaNeural` +10Hz −5%, `--engine edge`) 때: Jenny(+15Hz)로 바꿨다가 Ana로 되돌렸다(사용자: "목소리는 Ana가 나아"). 참고: Whisper 언어 판별로 한 단어 대사 80개 중 Ana는 65개만 영어(중국어 4, 일본어 9), Jenny는 80개 모두 영어였다. 목소리를 바꿀 때는 먼저 들려 주고 정한다.
 - 배경 깊이: `tools/build_depth.py`가 배경 그림의 깊이 지도(Depth Anything V2 Small, 로컬 CPU)를 만들어 `public/gl/bg_depth.png`에 저장 → 배경이 입체 부조가 되어 카메라가 움직이면 시차가 생긴다(정지 화면은 원본과 똑같다).
   - 실행: `uv run --with torch --with transformers --with pillow --with numpy python tools/build_depth.py`
@@ -78,6 +79,6 @@ WebGL(three.js) 3D 버전. 원본 `jinilee-hue/phonics-wordmashup`(@3f32c16)을 
   whisper 글자의 엄격 규칙(`sayJudge.ts`). 게임의 Mic 버튼도 같은 길이다(`apiSR.ts`가 `window.SpeechRecognition`을 `LocalSR`로 바꿈). 모델은 첫 탭 뒤 백그라운드로 받고, 아직 로딩 중이면 말하기 차례는 최대 8 s 기다린다.
 - 키는 기기마다 한 번(`localStorage.phonics_api_key`), 코드·저장소에 넣지 않는다(공개 repo). 설정 줄의 알약: 초록 "Linked" / "Add key".
 - QA: `tools/qa/api_sr.py`는 예전 Mic 연결(키가 없으면 브라우저 인식기)과 말하기 차례의 transcribe 로그를 전제로 해서 지금 코드와 맞지 않는다(README.md "도구").
-- 글리 목소리(영어 427줄 · 한국어 313줄) = 파닉스 게임 공통 튜터 목소리: 회사 phonics-api TTS의 Azure `en-US-AvaMultilingualNeural`을
+- 글리 목소리(영어 430줄, 언어 선택 없음) = 파닉스 게임 공통 튜터 목소리: 회사 phonics-api TTS의 Azure `en-US-AvaMultilingualNeural`을
   예전 'aiden' 높이·빠르기(×1.109 / ×1.035)로 맞춤(phonics-kit `tts_voice.tutor`, 2026-11-22부터). 단어 시점은 whisper(phonics-kit/tools/word_marks.py).
   `tools/build_glee_voice.py`(예전 목소리: `--engine phonics-api` = Ana, `--engine edge` = 시제품). 음성 주소의 `?v=`가 `tutor-ava-aiden`이라 옛 음성이 캐시에서 나오지 않음.

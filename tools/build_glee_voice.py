@@ -19,20 +19,12 @@ Lines are short English (user choice). Per card word: '<Word>!' and 'What goes w
 '<W1> and <w2> make... <compound>!', 'Say it with me! <Compound>!', '<Compound>!' and 'Look! <W1>... and <w2>!'.
 Edit LINES / the templates below and rerun; downloads are cached in ~/.cache/phonics-wordmashup/voice/.
 
-Korean (the EN | KO toggle on the title, src/gl/lang.ts; user 2026-11-22): every line again in Korean, same tutor voice
-with its Korean shape (tts_voice.tutor(text, 'ko')), into public/gl/voice/ko/<id>.mp3 and GLEE_VOICE.lines_ko. The card
-words stay English inside a Korean line ('같이 말해 보자! Pancake!'); a line that is only a card word ('Pan!',
-'Pancake!') has no Korean take - the game plays the English one. Lines without a card word are read back with the kit
-(tutor_takes.best). With a card word the kit's check can't pass (whisper in Korean writes 'pancake' as 팬케이크), so those
-are read back here twice - in Korean (the Korean words must be heard as Korean: a line that opens with an English word
-can come out all in English, 'Pan, cake, 둘이 만나면' -> 'Pancake Strix Mana') and in English (the card words) - and
-retaken with the kit's Korean wordings until heard right.
+English only: Word Mashup has no language choice (user 2026-11-22: "word mashup은 언어 선택 빼줘. 별도로 가기로 했잖아!").
 
 Run: /Users/jini/.local/bin/uv run --quiet --with numpy python tools/build_glee_voice.py      (key: ~/.config/phonics-api/key)
      old prototype voice: … --with edge-tts … build_glee_voice.py --engine edge
 """
 import asyncio
-import difflib
 import hashlib
 import json
 import pathlib
@@ -107,6 +99,11 @@ LINES = {
     'tryit': "Let's try it!",
     # the say turn's JUMP guide (phonics-kit README rule 2; the same line as Phonics Match / Magic Block / Croco / Eye Catch)
     'jump': 'Want to skip? Tap the jump button!',
+    # the explanation on the first game of a visit: the white glove plays round 1 for real while she says how
+    # (phonics-kit README common rule 1, user 2026-11-22 "설명 있는게 맞지"); the card words are the w_ / mk_ / r_ lines
+    'teach1': 'Look! Pick two cards that make one word.',
+    'teach_say': 'Now say it!',
+    'teach_try': 'Now you try!',
 }
 
 pairs = re.findall(r"word1:'(\w+)',\s*word2:'(\w+)',\s*result:'(\w+)'", (ROOT / 'src' / 'data' / 'compounds.ts').read_text())
@@ -124,64 +121,6 @@ for a, b, c in pairs:
     LINES[f'r_{c}'] = f'{cap(c)}!'
     LINES[f'hint_{c}'] = f'Look! {cap(say(a))}... and {say(b)}!'
 
-# Korean: short and friendly for a 5-year-old (the meanings in WordMashup_튜터대사_상황별.xlsx). No particle after a card
-# word (pan이랑 / cake랑 depends on how it ends), and a Korean word first where the line could open with an English one.
-LINES_KO = {
-    'hi': '안녕! 나는 글리야!',
-    'intro': '같이 새 단어를 만들어 보자!',
-    'how1': '여기서 카드 한 장,',
-    'how2': '그리고 여기서도 한 장!',
-    'ask1': '어떤 두 개가 짝일까?',
-    'ask2': '어떤 단어를 만들 수 있을까?',
-    'ask3': '새 단어를 찾아볼까?',
-    'tell': '말해 줘!',
-    'new1': '봐! 새 카드야!',
-    'new2': '자, 간다!',
-    'new3': '와! 새 카드가 왔어!',
-    'again': '한 번 더 놀자!',
-    'no1': '음, 그건 단어가 아니야. 다시 해 봐!',
-    'no2': '앗! 다른 걸 해 봐!',
-    'no3': '아깝다! 다시 해 봐!',
-    'help1': '도와줄까? 이걸 봐!',
-    'help2': '내가 도와줄게!',
-    'yes': '맞아!',
-    'praise1': '해냈어!',
-    'praise2': '정말 잘했어!',
-    'praise3': '완벽해!',
-    'praise4': '최고야!',
-    'nice1': '잘 해 봤어!',
-    'nice2': '좋아, 잘했어!',
-    'go1': '준비됐니? 가자!',
-    'go2': '다음 거 하자!',
-    'go3': '더 찾아보자!',
-    'poke1': '히히! 간지러워!',
-    'poke2': '안녕!',
-    'poke3': '같이 놀자!',
-    'spin1': '야호!',
-    'spin2': '으악! 어지러워!',
-    'end1': '우와! 새 단어를 여섯 개나 만들었어!',
-    'end2': '너는 단어 박사야!',
-    'nw': '그건 단어가 아니야!',
-    'tryagain': '다시 해 보자!',
-    'notquite': '음, 그건 아니야!',
-    'lookcards': '카드를 잘 봐!',
-    'listenup': '잘 들어 봐!',
-    'yourturn': '이제 말해 봐!',              # not 네 차례: 네 and 내 (my) sound the same
-    'tryit': '한번 넣어 보자!',
-    'jump': '넘어가고 싶으면 점프 버튼을 눌러!',   # the same line as Magic Block / Eye Catch / Phonics Match
-}
-assert set(LINES_KO) == {i for i in LINES if not re.match(r'(w|wg|ok|mk|say|r|hint)_', i)}, set(LINES_KO) ^ set(LINES)
-for w in words:
-    LINES_KO[f'wg_{w}'] = f'{cap(say(w))}! 뭐랑 어울릴까?'
-    LINES_KO[f'ok_{w}'] = f'{cap(say(w))}! 맞았어!'
-for a, b, c in pairs:
-    LINES_KO[f'mk_{c}'] = f'합쳐 보자! {cap(say(a))}, {say(b)}... {c}!'
-    LINES_KO[f'say_{c}'] = f'같이 말해 보자! {cap(c)}!'
-    LINES_KO[f'hint_{c}'] = f'잘 봐! {cap(say(a))}... 그리고 {say(b)}!'
-assert set(LINES_KO) <= set(LINES), set(LINES_KO) - set(LINES)
-if ENGINE != 'tutor':
-    LINES_KO = {}                                   # Korean only in the tutor voice
-OUT_KO = OUT / 'ko'
 
 # Spoken differently from the written line, for clarity only (the line's text stays as written), per voice: what
 # one voice garbles another says fine. Jenny: with the plain text Whisper (medium) heard 'Cellball', 'Self Lake',
@@ -329,82 +268,10 @@ def fetch_tutor():
     return len(todo)
 
 
-def ko_key(i, t):
-    return 'ko_' + key(i, t)
-
-
-def ko_heard(text, ko, en):
-    """a Korean line with card words: the Korean words heard as Korean (whisper small) and the card words heard - in
-    English (whisper small.en), or, failing that, as something in their place in the Korean transcript (whisper writes
-    them in Hangul)"""
-    import tutor_takes  # noqa: E402  (phonics-kit/tools is on the path: fetch_tutor_ko)
-    a, b = re.sub(r'[^가-힣]', '', text), re.sub(r'[^가-힣]', '', ko)
-    got = sum(m.size for m in difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks())
-    if got < .85 * len(a):
-        return False
-    ws = [w.lower() for w in re.findall(r'[A-Za-z]+', text)]
-    pool = f'{en} {ko}'.lower()
-    flat = re.sub(r'[^a-z]', '', pool)
-    if all(w in flat or set(re.findall(r'[a-z0-9]+', pool)) & tutor_takes.SAME.get(w, set()) for w in ws):
-        return True
-    return len(re.sub(r'[^가-힣a-z]', '', ko.lower())) - got >= len(ws)
-
-
-def fetch_tutor_ko():
-    """the Korean takes (same voice, Korean shape): kit tutor_takes.best for the all-Korean lines, the read-back above
-    (ko_heard) with the kit's Korean wordings for the lines with card words. Returns (new, per-round log, never)."""
-    sys.path.insert(0, str(pathlib.Path.home() / 'Documents/Jini/2026/Phonics/phonics-kit/tools'))
-    import tts_voice  # noqa: E402
-    import tutor_takes  # noqa: E402
-    CACHE.mkdir(parents=True, exist_ok=True)
-    todo = [(i, t) for i, t in LINES_KO.items() if not (CACHE / f'{ko_key(i, t)}.mp3').exists()]
-    plain = [(i, t) for i, t in todo if not re.search(r'[A-Za-z]', t)]
-    mixed = [(i, t) for i, t in todo if re.search(r'[A-Za-z]', t)]
-    log, never = [], []
-    if plain:
-        with ThreadPoolExecutor(4) as ex:
-            list(ex.map(lambda it: tts_voice.tutor(it[1], 'ko'), plain))
-        chosen, nv = tutor_takes.best([(f'k:{i}', t, 'ko') for i, t in plain], log=lambda m: log.append('plain' + m))
-        for i, t in plain:
-            shutil.copy2(chosen[f'k:{i}'], CACHE / f'{ko_key(i, t)}.mp3')
-        never += [(k, t, h) for k, t, h in nv]
-    cands = {i: tutor_takes.variants(f'k:{i}', t, 'ko') for i, t in mixed}
-    first, pending, rnd = {}, [i for i, _ in mixed], 0
-    text = dict(mixed)
-    while pending:
-        with ThreadPoolExecutor(4) as ex:
-            files = dict(zip(pending, ex.map(lambda i: tts_voice.tutor(cands[i][rnd], 'ko'), pending)))
-        heard = tutor_takes.read_back([(files[i], 'ko') for i in pending] + [(files[i], 'en') for i in pending])
-        n = len(pending)
-        still = []
-        for k, i in enumerate(pending):
-            hk, he = heard[k], heard[n + k]
-            first.setdefault(i, (files[i], hk, he))
-            if ko_heard(cands[i][rnd], hk, he):
-                shutil.copy2(files[i], CACHE / f'{ko_key(i, text[i])}.mp3')
-            else:
-                still.append(i)
-        log.append(f'with card words, take {rnd + 1}: {n - len(still)}/{n} heard right')
-        print(log[-1], flush=True)
-        rnd += 1
-        pending = [i for i in still if rnd < len(cands[i])]
-        for i in still:
-            if rnd >= len(cands[i]):                   # out of wordings: keep the first take (check it by ear)
-                f, hk, he = first[i]
-                shutil.copy2(f, CACHE / f'{ko_key(i, text[i])}.mp3')
-                never.append((f'k:{i}', text[i], f'{hk} | {he}'))
-    return len(todo), log, never
-
-
 got = asyncio.run(fetch_all()) if ENGINE == 'edge' else fetch_tutor() if ENGINE == 'tutor' else fetch_api()
 print(f'downloaded {got} new · cache {CACHE}')
-got_ko, ko_log, ko_never = fetch_tutor_ko() if LINES_KO else (0, [], [])
-print(f'Korean: {got_ko} new takes', *ko_log, sep='\n  ')
-if ko_never:
-    print('Korean never heard right (first take kept, check by ear):', *ko_never, sep='\n  ')
 OUT.mkdir(parents=True, exist_ok=True)
-OUT_KO.mkdir(parents=True, exist_ok=True)
-for f in [*OUT.glob('*.mp3'), *OUT_KO.glob('*.mp3')]:
+for f in OUT.glob('*.mp3'):
     f.unlink()
 
 
@@ -435,31 +302,20 @@ for i, t in LINES.items():
     sk = key(i, spoken(i, t))                    # cache entry of what is actually spoken
     lines[i] = cut(t, CACHE / f'{sk}.mp3', OUT / f'{i}.mp3', CACHE / f'{sk}.json')
     total += (OUT / f'{i}.mp3').stat().st_size
-# Korean: no word marks (word_marks.py hears English only) - the game times her pointing by the line's length then
-lines_ko, total_ko = {}, 0
-for i, t in LINES_KO.items():
-    lines_ko[i] = cut(t, CACHE / f'{ko_key(i, t)}.mp3', OUT_KO / f'{i}.mp3', None)
-    total_ko += (OUT_KO / f'{i}.mp3').stat().st_size
 
 entries = lambda d: ''.join(f'    {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)},\n' for k, v in d.items())
 TS.write_text(
     '// Generated by tools/build_glee_voice.py - do not edit. Glee\'s tutor lines (public/gl/voice/<id>.mp3).\n' +
     ('// Voice: the phonics games\' one tutor voice — Azure en-US-AvaMultilingualNeural via the company phonics-api, shaped to\n'
      '// the old aiden (pitch x1.109, speed x1.035; phonics-kit tts_voice.tutor), every take read back (user 2026-11-22).\n'
-     '// lines_ko: the same voice in Korean (public/gl/voice/ko/<id>.mp3, tts_voice.tutor(text, \'ko\')); a line without one\n'
-     '// (a card word alone) is played in English.\n'
      if ENGINE == 'tutor' else
      f'// Voice: {VOICE} {PITCH} {RATE} via edge-tts (prototype only).\n' if ENGINE == 'edge' else
      f'// Voice: {VOICE} via the company phonics-api TTS (Azure), pitch x{PITCH_K} + {RATE} applied by ffmpeg (user pick C, 2026-11-19).\n') +
     'export type VoiceLine = { text: string; start: number; dur: number; gain: number; mouth: string; words: [string, number, number][] };\n'
-    f'export const GLEE_VOICE: {{ voice: string; mouthMs: number; lines: Record<string, VoiceLine>; lines_ko: Record<string, VoiceLine> }} = {{\n'
+    f'export const GLEE_VOICE: {{ voice: string; mouthMs: number; lines: Record<string, VoiceLine> }} = {{\n'
     f'  voice: {json.dumps("tutor-ava-aiden" if ENGINE == "tutor" else VOICE if ENGINE == "edge" else VOICE + "-api")}, mouthMs: {MOUTH_MS},\n'
-    '  lines: {\n' + entries(lines) + '  },\n'
-    '  lines_ko: {\n' + entries(lines_ko) + '  },\n};\n',
+    '  lines: {\n' + entries(lines) + '  },\n};\n',
     encoding='utf-8')
 no_marks = [k for k, v in lines.items() if not v['words']]
 print(f'{len(lines)} lines · mp3 {total / 1024:.0f} KB · gleeVoice.ts {TS.stat().st_size / 1024:.0f} KB · without word marks: {len(no_marks)}')
-print(f'{len(lines_ko)} Korean lines · mp3 {total_ko / 1024:.0f} KB')
 print('longest:', sorted(((v['dur'], k) for k, v in lines.items()), reverse=True)[:5])
-if lines_ko:
-    print('longest Korean:', sorted(((v['dur'], k) for k, v in lines_ko.items()), reverse=True)[:5])

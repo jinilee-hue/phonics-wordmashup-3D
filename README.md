@@ -13,7 +13,7 @@
 
 ## 화면과 조작
 
-- **인트로**: 영상이 나오고 2초 뒤 SKIP, 영상이 끝나면 START. 한 번 누르면 소리가 켜져요. 언어 토글은 인트로 오른쪽 위에만 있어요.
+- **인트로**: 영상이 나오고 2초 뒤 SKIP, 영상이 끝나면 START. 한 번 누르면 소리가 켜져요.
 - **카드**: 왼쪽 세 장(앞 단어), 오른쪽 세 장(뒤 단어). 한 장씩 끌어 가운데 원에 놓고, 양쪽이 다 들어가면 판정해요. 보이는 카드로 만들 수 있는 합성어는 정답 하나뿐이에요(`src/scenes/GameScene.ts` `startRound`). 틀리면 ✗와 함께 두 카드가 제자리로 돌아가요.
 - **아래 버튼 줄**: Replay(새 게임) · Mic(두 단어를 말하면 카드가 들어감, 다시 누르면 취소) · Hint(정답 두 장을 빛내고 나머지를 흐리게, 3D에선 글리가 가리키며 이름을 말함) · Home(새로 고침 → 인트로).
 - **위**: Compound Book(모은 합성어 도감) · 별/코인/보석 배지(누르면 설명) · 톱니(Settings: Music, Sounds, Speech server key).
@@ -34,10 +34,10 @@
 ## 글리 (튜터, `src/gl/tutor.ts`)
 
 - 말풍선 없이 목소리로만 게임을 이끌어요. 한 번에 한 명만 말하고, 아이가 카드를 잡으면 말을 멈추고 그 카드를 읽어 줘요.
-- 시작 인사 → 두 줄을 가리키며 방법 설명 → "Which two go together? Tell me!" 하고 들어요. 합성어를 말하면 두 장을 다 넣고, 카드 단어 하나를 말하면 그 카드를 넣고 "What goes with pan?" 하고 다시 들어요. 카드로 해도 돼요.
+- 방문의 첫 게임은 인사 뒤에 **설명**(아래 "첫 게임 설명"), 다음 게임부터는 "Let's play again!". 라운드마다 "Which two go together?" 하고 들어요. 합성어를 말하면 두 장을 다 넣고, 카드 단어 하나를 말하면 그 카드를 넣고 "What goes with pan?" 하고 다시 들어요. 카드로 해도 돼요.
 - 틀린 쌍은 목소리로 안내해요: 두 카드를 읽고 "That's not a word!" → 한 장이 맞았으면 그 카드를 다시 넣고 짝을 물어요. 둘 다 틀리면 1번째 "Let's try again!", 2번째 첫 카드를 넣어 주고 짝을 묻고, 3번째 힌트. Mic 버튼의 안내 토스트도 글리 목소리로 바뀌어요.
 - 15초 동안 아무것도 안 하면 카드 하나를 가리키고, 28초면 힌트를 보여 줘요.
-- 목소리: 파닉스 게임 공통 튜터 목소리(phonics-api TTS, Azure `en-US-AvaMultilingualNeural`을 예전 'aiden' 높이·빠르기로 맞춤). 영어 427줄 · 한국어 313줄. `uv run --quiet --with numpy python tools/build_glee_voice.py`(키 `~/.config/phonics-api/key`) → `public/gl/voice/`, `public/gl/voice/ko/`, `src/gl/gleeVoice.ts`.
+- 목소리: 파닉스 게임 공통 튜터 목소리(phonics-api TTS, Azure `en-US-AvaMultilingualNeural`을 예전 'aiden' 높이·빠르기로 맞춤). 영어 430줄. `uv run --quiet --with numpy python tools/build_glee_voice.py`(키 `~/.config/phonics-api/key`) → `public/gl/voice/`, `src/gl/gleeVoice.ts`.
 
 ## 말하기 차례 (파닉스 공통 규칙, `src/gl/tutor.ts` `sayTurn`)
 
@@ -66,20 +66,32 @@
 
 ## 언어
 
-- 토글은 **인트로(타이틀)에만** 있어요. 게임 화면·결과에는 없어요(`src/gl/lang.ts`).
-- 처음 방문은 **한국어**, 선택은 localStorage `wm-lang`에 남아요.
-- 바뀌는 건 **글리 목소리만**: 한국어 대사 안에서도 카드 단어는 영어("같이 말해 보자! Pancake!"), 카드 단어만 있는 대사("Pan!", "Pancake!")는 영어로 나와요. 화면 글자는 영어 그대로예요.
+- **언어 선택 없음.** 글리 목소리도 화면 글자도 영어만이에요(사용자 2026-11-22: "word mashup은 언어 선택 빼줘. 별도로 가기로 했잖아!" — 파닉스 공통 규칙의 언어 토글을 이 게임은 따르지 않아요). 한국어 음성(`public/gl/voice/ko/`)과 토글(`src/gl/lang.ts`, localStorage `wm-lang`)은 지웠어요.
+
+## 첫 게임 설명 (`src/gl/tutor.ts` `teach`, `src/gl/howto.ts`)
+
+방문(페이지를 연 뒤)의 첫 게임에서 1라운드를 하기 전에, 다른 파닉스 게임처럼 실제로 한 판을 보여 줘요(사용자 2026-11-22: "설명 있는게 맞지", Puzzle의 teachDemo와 같은 방식).
+
+1. "Hi! I'm Glee!" → "Let's make new words together!" → "Look! Pick two cards that make one word."(두 줄을 가리킴)
+2. 흰 장갑(JUMP 안내와 같은 `public/gl/hand.webp`)이 1라운드 정답 왼쪽 카드를 눌러 가운데 원에 끌어다 놓고, 오른쪽 카드도 똑같이. 카드를 집을 때마다 글리가 읽어 줘요("Pan!" "Cake!"). 놓기·판정은 게임의 것 그대로(`selectedLeft/Right` + `snapToZone` → `checkMatch`)라 두 카드가 진짜로 부딪혀 합성어 카드가 나와요 — "Pan and cake make... pancake!"
+3. 말하기 차례를 잠깐 보여 줌: "Now say it! Pancake!" → 귀 아이콘 1.4초(마이크는 열지 않고 판정도 없음).
+4. 합성어 카드가 빠지고 같은 1라운드를 다시 나눠 줘요 → "Now you try!" → 보통 라운드처럼 들어요.
+
+- **아무것도 주지도 깎지도 않아요**: 별·코인·보석·하트·도감 카드·진행 막대·공통 기록 모두 그대로(`index.ts`가 설명의 `onRoundWin`을 건너뜀). 설명 동안 카드·Hint·Mic는 막혀 있어요.
+- **SKIP**(오른쪽 아래, 아래 버튼 줄 높이의 흰 반투명 유리 알약 — phonics-kit 공통 규칙 1): 첫 대사부터 설명 끝(1라운드를 다시 나눠 줄 때)까지 보여요. 누르면 목소리와 장갑이 바로 멈추고 판이 아이 것이 돼요 — 장갑이 옮기던 카드는 제자리로, 부딪히는 중이었으면 1라운드를 다시 나눠 줘요(남은 충돌 연출은 `crashGen`으로 끊음).
+- 같은 방문의 다음 게임(Replay)에는 설명이 없어요. Home은 페이지를 새로 열어서 다시 나와요. 2D(`?q=2d`)·`?tutor=off`·`?glee=off`에는 글리가 없어 설명도 없어요.
+- 대사: `teach1` "Look! Pick two cards that make one word." · `teach_say` "Now say it!" · `teach_try` "Now you try!"(영어만). 카드 단어는 기존 `w_`·`mk_`·`r_` 대사.
 
 ## 기록
 
 - 게임이 끝나면(6라운드 뒤) 파닉스 게임 공통 기록(localStorage `phonics.progress`)에 `word-mashup` 한 줄: 만든 단어 수, 말하기 통과 수(`said`)·차례 수(`sayTurns`), 별·코인·보석, 시간, 틀린 쌍 수(`src/progress.ts`, phonics-kit `phonics-progress.js` 복사본). 기록만 하고 레벨 선택은 없어요. 2D도 기록해요(말하기 차례 없음).
-- 그 밖의 localStorage: `phonics_collected_v1`(도감), `wm-lang`, `wm3d-glee-spot-v1`(글리 자리), `wm3d-quality-v2`(자동 품질), `phonics_api_key`.
+- 그 밖의 localStorage: `phonics_collected_v1`(도감), `wm3d-glee-spot-v1`(글리 자리), `wm3d-quality-v2`(자동 품질), `phonics_api_key`.
 
 ## 도구
 
 | 스크립트 | 하는 일 |
 |---|---|
-| `tools/build_glee_voice.py` | 글리 대사 음성(영어·한국어) |
+| `tools/build_glee_voice.py` | 글리 대사 음성(영어) |
 | `tools/build_phonemes.py` | phonics-api 기대 소리열 |
 | `tools/unwarp_cards.py` · `tools/build_depth.py` | 3D 카드 앞면 / 배경 깊이 지도(README-3D.md) |
 | `tools/drop_ort_wasm.mjs` | 빌드 뒤 쓰지 않는 onnxruntime wasm 삭제 |
@@ -91,11 +103,11 @@
 
 | 파일 | 역할 |
 |---|---|
-| `src/main.ts` | 인트로 영상·SKIP/START·언어 토글, Phaser 게임 시작, 3D 시작 |
+| `src/main.ts` | 인트로 영상·SKIP/START, Phaser 게임 시작, 3D 시작 |
 | `src/scenes/GameScene.ts` | 규칙·입력·HUD·Mic·Hint·Settings·도감·피날레(Phaser). NUL 바이트가 섞여 있어 `grep -a`로 찾아요 |
 | `src/data/compounds.ts` · `phonemes.ts` | 합성어 43쌍 / 기대 소리열 |
 | `src/gl/index.ts` | 3D 층 연결, 품질 단계, 보상 붙잡기, JUMP 자리 |
-| `src/gl/tutor.ts` · `glee.ts` · `gleeVoice.ts` · `jump.ts` · `lang.ts` | 글리 진행 / 글리 모델 / 대사 데이터 / JUMP / 언어 |
+| `src/gl/tutor.ts` · `glee.ts` · `gleeVoice.ts` · `jump.ts` · `howto.ts` | 글리 진행·첫 게임 설명 / 글리 모델 / 대사 데이터 / JUMP / 설명 SKIP·장갑 |
 | `src/gl/apiSR.ts` · `sayJudge.ts` · `stt.ts` · `sttWorker.ts` | 녹음·글자 듣기·Mic / 말하기 판정 / 기기 안 whisper |
 | `src/progress.ts` | 공통 기록 |
 | `src/vendor/phonics-api.js` · `phonics-progress.js` | phonics-kit 복사본 — kit을 고친 뒤 다시 복사 |

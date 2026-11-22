@@ -11,6 +11,7 @@ import { Mashup } from './mashup';
 import { Reward, type Gain, type Kind } from './reward';
 import { Tutor, type SayEnd } from './tutor';
 import { JumpButton } from './jump';
+import { HowTo } from './howto';
 import { run as progressRun } from '../progress';
 import { GATE_UV, Stage, type Quality } from './stage';
 import { ARRIVE_AT, Travel } from './travel';
@@ -63,6 +64,10 @@ const state = {
   sayVerdict: null as null | { round: number; ok: boolean },
   /** the JUMP button of the say-it turn (with the tutor) */
   jump: null as JumpButton | null,
+  /** the explanation's SKIP and white glove (first game of a visit, with the tutor) */
+  howto: null as HowTo | null,
+  /** bumped when the explanation's board is cleared: a collision still under way then does nothing more (crash3D) */
+  crashGen: 0,
   /** the won round's result card (the JUMP button perches on it) */
   resultCard: null as Any,
   game: null as Phaser.Game | null,
@@ -298,6 +303,7 @@ function wireReward(scene: Any) {
   };
   const rw = function (this: Any, card: Any) {
     state.resultCard = card;
+    if (state.on && state.tutor?.teaching) return;      // the explanation's compound card: nothing paid, the round stays
     if (state.on && state.tutor?.enabled) return holdForSay(card);
     if (!state.on || reducedMotion() || !state.reward) return win.call(scene, card);
     const hold = { calls: [] as [Any, number, number][] };
@@ -410,23 +416,26 @@ function crash3D(scene: Any) {
   const pair = scene.queue[scene.roundIndex];
   const L = scene.selectedLeft, R = scene.selectedRight;
   const m = state.mashup!;
+  const gen = state.crashGen;                             // SKIP mid-explanation drops the rest (redeal)
   m.setQuality(state.stage!.quality, reducedMotion());
   scene.cameras.main.shake(300, 0.007);
   gameAudio.playBurst();
   m.fight(CX, CY, Math.min(scene.gw, scene.gh));
   for (const c of [L, R]) if (c?.active) state.cards?.scuffle(c);
   scene.time.delayedCall(CRASH.pop * 1000, () => {
+    if (gen !== state.crashGen) return;
     m.pop();
     scene.cameras.main.shake(220, 0.005);
     gameAudio.playBurst();
   });
   // gone while the heap covers them (GameScene's 350 ms pulseOut would still show when it opens)
   scene.time.delayedCall(CRASH.out * 1000, () => {
+    if (gen !== state.crashGen) return;
     for (const c of [L, R]) {
       if (c?.active) scene.tweens.add({ targets: c, alpha: 0, duration: 70, onComplete: () => c.destroy() });
     }
   });
-  scene.time.delayedCall(CRASH.result * 1000, () => scene.showResultCard(pair));
+  scene.time.delayedCall(CRASH.result * 1000, () => { if (gen === state.crashGen) scene.showResultCard(pair); });
 }
 
 // GameScene.showResultCard flips the card in edge-on from above; in the intro it grows out of the
@@ -455,7 +464,40 @@ function resultGrows(scene: Any, show: Any, pair: Any) {
   } finally {
     delete add.container;
     delete tweens.add;
+    if (cont && state.tutor?.teaching) state.resultCard = cont;   // the explanation waits for it (and SKIP clears it)
   }
+}
+
+/** The explanation is over (tutor.endTeach): its cards and compound card go and round 1 is dealt again - nothing was paid
+ *  or recorded for it (GameScene.onRoundWin never ran). soft = after the demo: the compound card leaves as after a win;
+ *  else SKIP once the collision has begun: all at once, the collision stops where it is (crashGen, the tweens killed).
+ *  (SKIP before the collision only puts the glove's cards back: tutor.putBack.) */
+function redeal(scene: Any, soft: boolean) {
+  if (!scene?.sys?.isActive()) return;
+  state.crashGen++;
+  if (soft) state.mashup?.stopReveal(); else state.mashup?.clear();
+  for (const c of [...(scene.leftCards ?? []), ...(scene.rightCards ?? [])]) {
+    if (!c?.active) continue;
+    scene.tweens.killTweensOf(c);
+    c.destroy();
+  }
+  const card = state.resultCard;
+  state.resultCard = null;
+  if (card?.active) {
+    scene.tweens.killTweensOf(card);
+    if (soft) scene.tweens.add({ targets: card, alpha: 0, scaleX: 0.7, y: '-=50', duration: 320, ease: 'Cubic.easeIn', onComplete: () => card.destroy() });
+    else card.destroy();
+  }
+  scene.selectedLeft = undefined;
+  scene.selectedRight = undefined;
+  scene.startRound();                                     // roundIndex is still 0: the cards slide in, no flight
+}
+
+/** the explanation's SKIP: bottom right, on the bottom buttons' row and as tall as they are (GameScene.buildBottomNav) */
+function placeSkip(s: Any) {
+  const game = state.game!, r = game.canvas.getBoundingClientRect(), k = r.width / game.scale.width;
+  const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy);
+  state.howto!.placeSkip(r.left + (s.gw - 32 * su) * k, r.top + (648 * sy + 29 * su) * k, 58 * su * k);
 }
 
 // The new round's cards already exist (Phaser made them); park them on their slots, block input,
@@ -612,6 +654,7 @@ function frame(game: Phaser.Game) {
   state.travel!.update(dt);
   if (DEMO_FLY && !state.travel!.active) flyDemo(stage, t);
   if (state.jump?.shown) placeJump(s);
+  if (state.howto?.skipShown) placeSkip(s);
   if (state.glee) {
     if (gleeDrag && gleeDrag.mode === 'press' && now - gleeDrag.t0 >= LONG_PRESS) pickUpGlee();
     placeGlee(s, dt);
@@ -700,6 +743,8 @@ function giveUp(reason: string) {
   state.tutor = null;
   state.jump?.dispose();
   state.jump = null;
+  state.howto?.dispose();
+  state.howto = null;
   state.stage?.dispose();
   state.stage = null;
   // 2D only for this tab session; the next visit tries 3D again (at low after a slow give-up)
@@ -897,12 +942,21 @@ export function start3D(game: Phaser.Game) {
         if (qs.get('tutor') !== 'off') {
           state.jump = new JumpButton();
           state.jump.placer = () => { if (state.scene) placeJump(state.scene); };
+          state.howto = new HowTo();
+          state.howto.placer = () => { if (state.scene) placeSkip(state.scene); };
+          state.howto.toPage = (x: number, y: number) => {
+            const r = game.canvas.getBoundingClientRect(), k = r.width / game.scale.width;
+            return { x: r.left + x * k, y: r.top + y * k, k };
+          };
           state.tutor = new Tutor(state.glee, {
             glow: (card: Any) => state.cards?.hint(card),
             showHint: () => state.scene?.showHint(),
             bgm: () => (gameAudio as Any).bgmEl ?? null,
             said: sayDone,
             jump: state.jump,
+            howto: state.howto,
+            redeal: (soft: boolean) => redeal(state.scene, soft),
+            resultCard: () => state.resultCard,
           });
         }
       }
