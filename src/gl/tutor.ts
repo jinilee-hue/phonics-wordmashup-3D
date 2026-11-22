@@ -17,8 +17,15 @@
 // right!") and asks for its partner, pointing at the other column; otherwise 1st miss "Let's try again!", 2nd she
 // shows and places the first card and asks for the partner, 3rd the hint. Spoken misses go the same way, and the
 // game's Mic button feedback (Korean toasts) becomes her voice too.
+//
+// The say-it turn after a match follows the phonics games' common rule (phonics-kit README, user 2026-11-22): a JUMP
+// button on the result card skips it; two wrong tries end it ("Good try!"); quiet -> she reads it again and waits once
+// more (about 20 s in all; on the first quiet turn of a game she shows the JUMP button); nothing can judge -> no turn.
+// Only a said word earns its reward (stars, coins, gems, its Compound Book card: index.ts holds them until then).
 import type { Glee } from './glee';
 import { GLEE_VOICE, type VoiceLine } from './gleeVoice';
+import type { JumpButton } from './jump';
+import { apiReady, hearByApi, judgeText, saidCompound, type SayVerdict } from './sayJudge';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any;
@@ -35,7 +42,13 @@ export type TutorHooks = {
   showHint: () => void;
   /** the game's BGM element (ducked while Glee talks or listens) */
   bgm: () => HTMLAudioElement | null;
+  /** the say-it turn of `round` ended: ok = the child said the word (its reward is paid), else no reward */
+  said: (round: number, ok: boolean, why: SayEnd) => void;
+  /** the JUMP button (shown during the say-it turn) */
+  jump: JumpButton | null;
 };
+/** how a say-it turn ended */
+export type SayEnd = 'ok' | 'jump' | 'tries' | 'quiet' | 'nojudge' | 'cut';
 
 const SPEAK = { bgm: 0.16, listen: 0.05 };
 const IDLE_POINT = 15, IDLE_HINT = 28;
@@ -157,6 +170,8 @@ class Ears {
   private rec: Any = null;
   private done: ((h: string[] | null) => void) | null = null;
   denied = false;
+  /** the last session's error, if it could not listen at all (no-speech / aborted are normal endings) */
+  failed = false;
   get SR(): Any { return (window as Any).SpeechRecognition || (window as Any).webkitSpeechRecognition; }
   get available() { return !!this.SR && !this.denied; }
   get on() { return !!this.rec; }
@@ -165,7 +180,8 @@ class Ears {
   listen(ms: number, enough: (texts: string[]) => boolean): Promise<string[] | null> {
     this.stop();
     const SR = this.SR;
-    if (!SR || this.denied) return Promise.resolve(null);
+    this.failed = false;
+    if (!SR || this.denied) { this.failed = true; return Promise.resolve(null); }
     return new Promise(res => {
       let last: string[] | null = null, settled = false;
       const finish = (h: string[] | null) => {
@@ -197,11 +213,12 @@ class Ears {
       };
       rec.onerror = (e: Any) => {
         if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed' || e?.error === 'audio-capture') this.denied = true;
+        if (e?.error && e.error !== 'no-speech' && e.error !== 'aborted') this.failed = true;
       };
       rec.onend = () => finish(last);
       const timer = setTimeout(() => { try { rec.stop(); } catch { /* ended */ } }, ms);
       const hard = setTimeout(() => finish(last), ms + (rec.phonics ? 7000 : 1500));   // phonics-api: the text comes after the recording (gl/apiSR.ts)
-      try { rec.start(); } catch { finish(null); }
+      try { rec.start(); } catch { this.failed = true; finish(null); }
     });
   }
 
@@ -224,6 +241,8 @@ export class Tutor {
   private wrongs = 0;
   private lastRead = { w: '', t: -1e9 };
   private greeted = false;
+  /** the JUMP button's guide was shown in this game */
+  private jumpTold = false;
   private readyRound = -1;
   private hold: (() => void) | null = null;
   private holdAt = 0;
@@ -252,6 +271,8 @@ export class Tutor {
     this.readyRound = -1;
     this.idle = 0; this.idleStage = 0; this.wrongs = 0;
     this.placing = false;
+    this.jumpTold = false;
+    this.hooks.jump?.hide();
   }
 
   // ── jobs: one at a time; a more (or equally) important one cuts the current one ──
@@ -555,43 +576,119 @@ export class Tutor {
     });
   }
 
-  /** the pair collided: name the new word as it appears */
+  /** the pair collided: name the new word as it appears, then the child's say-it turn. Its end is reported once
+   *  (hooks.said): only 'ok' pays the word's reward. */
   onMatch() {
     const pair = this.pair();
     this.wrongs = 0; this.idle = 0;
     if (!pair) return;
-    this.run(3, 'match', async j => {
-      if (!await this.say(j, [`mk_${pair.result}`])) return;
-      await this.untilHold(j, 4);
-      if (j.cancelled) return;
-      // repeat after me
-      if (!await this.say(j, [`say_${pair.result}`], () => { this.glee.mode = 'ask'; })) return;
-      let ok: boolean | null = null;
-      if (this.ears.available) {
-        const h = await this.listen(j, 5000, t => heardCompound(t, pair));
+    const round = this.scene?.roundIndex ?? 0;
+    let ended = false;
+    const end = (why: SayEnd) => {
+      if (ended) return;
+      ended = true;
+      this.log('said', why);
+      this.hooks.said(round, why === 'ok', why);
+    };
+    const started = this.run(3, 'match', async j => {
+      try {
+        if (!await this.say(j, [`mk_${pair.result}`])) return;
+        await this.untilHold(j, 8);                 // the result card is up (a slow device takes longer)
         if (j.cancelled) return;
-        ok = h ? heardCompound(h, pair) : null;
-        if (ok !== true) {
-          // missed: the word in its parts, then once more - "Listen! Pan! Cake! Pancake! Your turn!"
-          if (!await this.say(j, ['listenup', `w_${pair.word1}`, `w_${pair.word2}`, `r_${pair.result}`, 'yourturn'],
-            id => { if (id === 'yourturn') this.glee.mode = 'ask'; })) return;
-          const h2 = await this.listen(j, 5000, t => heardCompound(t, pair));
-          if (j.cancelled) return;
-          ok = h2 ? heardCompound(h2, pair) : ok;
+        const why = await this.sayTurn(j, pair);
+        if (j.cancelled) return;
+        end(why);
+        if (why === 'ok') {
+          this.glee.react('cheer');
+          if (!await this.say(j, [this.pick('praise', ['praise1', 'praise2', 'praise3', 'praise4'])])) return;
+        } else if (why === 'nojudge') {
+          if (!await this.wait(j, 1)) return;       // nothing to judge with: no turn, a moment with the new word
         }
-      } else if (!await this.wait(j, 1.6)) return;
-      if (ok === false) {
-        if (!await this.say(j, [this.pick('nice', ['nice1', 'nice2']), `r_${pair.result}`])) return;
-      } else if (ok === null && this.ears.available) {
-        if (!await this.say(j, [`r_${pair.result}`])) return;
-      } else {
-        this.glee.react('cheer');
-        if (!await this.say(j, [this.pick('praise', ['praise1', 'praise2', 'praise3', 'praise4'])])) return;
-      }
-      const last = this.scene && this.scene.roundIndex >= (this.scene.queue?.length ?? 6) - 1;
-      if (!last && !await this.say(j, [this.pick('go', ['go1', 'go2', 'go3'])])) return;
-      this.releaseHold();
+        // JUMP: on at once, as Match's board comes back at once
+        const last = this.scene && this.scene.roundIndex >= (this.scene.queue?.length ?? 6) - 1;
+        if (why !== 'jump' && !last && !await this.say(j, [this.pick('go', ['go1', 'go2', 'go3'])])) return;
+        this.releaseHold();
+      } finally { end('cut'); }
     });
+    if (!started) end('cut');
+  }
+
+  /** "Say it with me! Pancake!" -> listen. Ends 'ok' (said), 'jump' (the JUMP button), 'tries' (two wrong tries: "Good
+   *  try!"), 'quiet' (silent twice: she read it again in between - about 20 s in all), 'nojudge' (nothing can judge:
+   *  the turn is skipped) or 'cut'. Phonics Match's sayItTurn is the model. */
+  private async sayTurn(j: Job, pair: Pair): Promise<SayEnd> {
+    if (!apiReady() && !this.ears.available) return 'nojudge';
+    let jumped = false;
+    // the turn's own job: JUMP ends the line or the listening at once, the match job goes on (go line, release)
+    const t: Job = { prio: j.prio, name: 'sayturn', get cancelled() { return j.cancelled || jumped; }, set cancelled(_v: boolean) { /* via j / jumped */ } };
+    const jb = this.hooks.jump;
+    if (jb) {
+      jb.onJump = () => { if (jumped) return; jumped = true; this.log('jump'); this.voice.stop(); this.ears.stop(); };
+      jb.show();
+    }
+    let misses = 0, quiet = 0, retried = false;
+    let prompt = [`say_${pair.result}`];
+    try {
+      for (let k = 0; k < 8; k++) {
+        await this.say(t, prompt, id => { if (id.startsWith('say_') || id === 'yourturn') this.glee.mode = 'ask'; });
+        if (t.cancelled) break;                     // (a line that could not play still gets its listen)
+        const v = await this.hear(t, pair, quiet ? 7500 : 6000);
+        if (t.cancelled) break;
+        if (v === 'ok') return 'ok';
+        if (v === 'nojudge') return 'nojudge';
+        if (v === 'retry') {
+          // the server failed on this take: once more, and the browser's recogniser listens (the kit rests the server)
+          if (retried || !this.ears.available) return 'nojudge';
+          retried = true;
+          prompt = [`r_${pair.result}`, 'yourturn'];
+        } else if (v === 'miss') {
+          if (++misses >= 2) { await this.say(t, ['nice2', `r_${pair.result}`]); return t.cancelled && jumped ? 'jump' : 'tries'; }   // "Good try! Pancake!"
+          // "Listen! Pan! Cake! Pancake! Your turn!"
+          prompt = ['listenup', `w_${pair.word1}`, `w_${pair.word2}`, `r_${pair.result}`, 'yourturn'];
+        } else {
+          // silence: she reads it again and waits once more; quiet again -> on, without the reward
+          if (++quiet >= 2) return 'quiet';
+          if (!this.jumpTold) { this.jumpTold = true; await this.jumpGuide(t); if (t.cancelled) break; }
+          prompt = [`r_${pair.result}`, 'yourturn'];
+        }
+      }
+      return jumped ? 'jump' : j.cancelled ? 'cut' : 'quiet';
+    } finally {
+      if (jb) { jb.onJump = null; jb.hide(); }
+      if (this.job === j) this.glee.mode = null;
+    }
+  }
+
+  /** one listen of the say-it turn: phonics-api (analyze + judge) when it can, else the browser's recogniser */
+  private async hear(t: Job, pair: Pair, ms: number): Promise<SayVerdict> {
+    if (t.cancelled) return 'aborted';
+    if (apiReady()) {
+      const v = await hearByApi(pair, {
+        waitMs: ms, aborted: () => t.cancelled,
+        listening: on => { this.glee.mode = on ? 'listen' : null; this.log(on ? 'listen' : 'heard', on ? undefined : 'phonics-api'); },
+      });
+      if (v === 'nojudge') this.ears.denied = true;   // the microphone was refused: the browser's recogniser can't hear either
+      return v;
+    }
+    if (!this.ears.available) return 'nojudge';
+    this.glee.mode = 'listen';
+    this.log('listen');
+    const h = await this.ears.listen(ms, txt => saidCompound(txt, pair));
+    this.glee.mode = null;
+    this.log('heard', h ? h.join(' | ') : '-');
+    if (t.cancelled) return 'aborted';
+    return judgeText(pair, h, this.ears.failed);
+  }
+
+  /** the first quiet turn of a game: Glee points at the JUMP button while the white glove taps it twice and she says
+   *  "Want to skip? Tap the jump button!" (her voice is the phonics games' tutor voice since 2026-11-22) */
+  private async jumpGuide(t: Job) {
+    const jb = this.hooks.jump;
+    if (!jb?.shown) return;
+    this.log('jumpguide');
+    this.glee.mode = null;
+    if (jb.at) this.glee.pointAt([jb.at], 2.8);
+    await Promise.all([jb.guide(() => t.cancelled), GLEE_VOICE.lines.jump ? this.say(t, ['jump']) : Promise.resolve(true)]);
   }
 
   /** GameScene would clear the result card 2.4 s after the win; Glee lets it go when she has finished. */
@@ -672,6 +769,7 @@ export class Tutor {
 
   dispose() {
     this.cancel();
+    this.hooks.jump?.hide();
     this.releaseHold();
     this.glee.talk = null;
     const bgm = this.hooks.bgm();

@@ -206,6 +206,8 @@
   // hello / Korean talk / silence / noise still never pass (the new ones: sound-alike m-words mat/mice/mail, apple → map)
   PA.okMax = 0.5;      // 'ok' up to this much difference per sound (0.5 ≈ one wrong vowel in a 3-sound word)
   PA.minConf = 0.4;    // below this server confidence: no verdict ('unclear')
+  PA.firstWithin = 4; // the target's first sound must be among the first N sounds heard (chant / "the" / Korean 'eu' before it)
+  const END_ONLY = new Set(['p m', 'm p']);   // near only at a word's END (Korean unreleased p heard as m), not as its first sound
   PA.rivalMax = 0.34;  // another word blocks an 'ok' only when IT was heard within this much per sound (≈ exactly)
   PA.judge = function (data, target, words, table) {
     const heard = PA.norm(data && data.detected_phonemes);
@@ -222,7 +224,14 @@
     // another word blocks an 'ok' only when IT was heard (almost) exactly and clearly closer — a short word matching the
     // start of a long one cheaply ("mug" inside a Korean-accented "mushroom") no longer blocks it
     const rivalExact = rival != null && dr / (PA.norm(table[rival]).length || 1) <= PA.rivalMax;
-    if (dt / len <= PA.okMax && !(rivalExact && dt - dr >= 0.6)) res.verdict = 'ok';
+    // a word has a vowel: with none heard at all it was a hum / "mmm" / a click — never 'ok' (user 2026-11-22: "잘못말해도
+    // 카드가 획득되는데?"; a 220 Hz hum came back 'm m m', 1.4 from moon 'm uw n' = inside 0.5 × 3, and won the card)
+    const voiced = heard.some(p => VOWELS.has(p)) || !PA.norm(table[target]).some(p => VOWELS.has(p));
+    // and the word's FIRST sound must be heard near the start (these are phonics games: /m/ is the lesson) — "apple" heard
+    // 'ae p ah l' was 1.35 from map 'm ae p' and passed; "the moon", a Korean 'eu' and the /m/ /m/ chant still pass
+    const exp0 = PA.norm(table[target])[0];
+    const firstHeard = !exp0 || heard.slice(0, PA.firstWithin).some(p => p === exp0 || (NEAR.has(p + ' ' + exp0) && !END_ONLY.has(p + ' ' + exp0)));
+    if (voiced && firstHeard && dt / len <= PA.okMax && !(rivalExact && dt - dr >= 0.6)) res.verdict = 'ok';
     else if (dr <= 0.5 && dt - dr >= 0.6) res.verdict = 'wrong';
     return dbgJudge(res, data, target, table);
   };

@@ -40,10 +40,15 @@ SR = 24000
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / 'public' / 'gl' / 'voice'
 TS = ROOT / 'src' / 'gl' / 'gleeVoice.ts'
-ENGINE = sys.argv[sys.argv.index('--engine') + 1] if '--engine' in sys.argv else 'phonics-api'
+# 'tutor' (default since 2026-11-22, user: "word mashup tts도 바꿔야지?") = the one tutor voice of the phonics games
+# (phonics-kit tts_voice.tutor: Ava Multilingual shaped to the old 'aiden', user 2026-11-20 "Ava Multilingual · aiden 높이·빠르기
+# 이걸로 통일"), every take read back with whisper and retaken with another wording until heard right (kit tutor_takes).
+# 'phonics-api' = the old Ana build, 'edge' = the prototype edge-tts build.
+ENGINE = sys.argv[sys.argv.index('--engine') + 1] if '--engine' in sys.argv else 'tutor'
 PITCH_K = 1.035                       # phonics-api: '+10Hz' on Ana as a pitch factor (tts_voice.py)
 CACHE = pathlib.Path.home() / '.cache' / 'phonics-wordmashup' / 'voice' / (
-    f'{VOICE}_{RATE.replace("%", "pct")}_{PITCH}' if ENGINE == 'edge' else f'phonics-api_{VOICE}_p{PITCH_K}')
+    f'{VOICE}_{RATE.replace("%", "pct")}_{PITCH}' if ENGINE == 'edge' else 'tutor_ava_aiden' if ENGINE == 'tutor'
+    else f'phonics-api_{VOICE}_p{PITCH_K}')
 # spelled for the TTS only: the card 'bow' is a ribbon bow (rhymes with 'go'), never the bow you take
 SAY = {'bow': 'bo'}
 
@@ -90,6 +95,8 @@ LINES = {
     'listenup': 'Listen!',
     'yourturn': 'Your turn!',
     'tryit': "Let's try it!",
+    # the say turn's JUMP guide (phonics-kit README rule 2; the same line as Phonics Match / Magic Block / Croco / Eye Catch)
+    'jump': 'Want to skip? Tap the jump button!',
 }
 
 pairs = re.findall(r"word1:'(\w+)',\s*word2:'(\w+)',\s*result:'(\w+)'", (ROOT / 'src' / 'data' / 'compounds.ts').read_text())
@@ -127,13 +134,13 @@ SPOKEN_BY_VOICE = {
         'ok_chair': 'Chair, is right!',
     },
 }
-SPOKEN = SPOKEN_BY_VOICE.get(VOICE, {})
+SPOKEN = SPOKEN_BY_VOICE.get(VOICE, {}) if ENGINE != 'tutor' else {}   # the tutor build retakes by itself
 assert set(SPOKEN) <= set(LINES), set(SPOKEN) - set(LINES)
 spoken = lambda i, t: SPOKEN.get(i, t)
 # Slower for single lines (same voice) when no spelling fixes them: Ana's 'Chair!' -> 'Share', 'Corn!' -> 'C.O.N.' at -5%.
 # Lines at the default rate keep their old cache keys, so their clips stay byte-identical.
 RATE_BY_VOICE = {'en-US-AnaNeural': {'w_chair': '-20%', 'w_corn': '-20%'}}
-LINE_RATE = RATE_BY_VOICE.get(VOICE, {})
+LINE_RATE = RATE_BY_VOICE.get(VOICE, {}) if ENGINE != 'tutor' else {}
 assert set(LINE_RATE) <= set(LINES), set(LINE_RATE) - set(LINES)
 rate_of = lambda i: LINE_RATE.get(i, RATE)
 
@@ -223,7 +230,37 @@ def fetch_api():
     return len(todo)
 
 
-got = asyncio.run(fetch_all()) if ENGINE == 'edge' else fetch_api()
+def fetch_tutor():
+    """the unified tutor voice: kit tutor_takes reads every take back (whisper) and retakes with another wording"""
+    sys.path.insert(0, str(pathlib.Path.home() / 'Documents/Jini/2026/Phonics/phonics-kit/tools'))
+    import tts_voice  # noqa: E402
+    import tutor_takes  # noqa: E402
+    CACHE.mkdir(parents=True, exist_ok=True)
+    todo = [(i, t) for i, t in LINES.items() if not (CACHE / f'{key(i, t)}.mp3').exists()]
+    one_word = lambda t: re.fullmatch(r"[A-Za-z]+[.!?]*", t.strip()) is not None
+    jk = lambda i, t: ('w:' if one_word(t) else '') + i
+    with ThreadPoolExecutor(4) as ex:                  # warm the TTS cache: the first wording of every line, 4 at a time
+        list(ex.map(lambda it: tts_voice.tutor(tutor_takes.variants(jk(*it), it[1], 'en')[0], 'en'), todo))
+    chosen, never = tutor_takes.best([(jk(i, t), t, 'en') for i, t in todo])
+    for i, t in todo:
+        shutil.copy2(chosen[jk(i, t)], CACHE / f'{key(i, t)}.mp3')
+    if never:
+        print('never heard right (first take kept, check by ear):', [(k, t, h) for k, t, h in never])
+    need = [(i, t) for i, t in LINES.items() if not (CACHE / f'{key(i, t)}.json').exists()]
+    if need:
+        with tempfile.TemporaryDirectory() as td:
+            items = [{'file': str(CACHE / f'{key(i, t)}.mp3'), 'text': t} for i, t in need]
+            pathlib.Path(td, 'in.json').write_text(json.dumps(items))
+            subprocess.run([str(pathlib.Path.home() / '.claude/skills/video-vision/.venv/bin/python'),
+                            str(pathlib.Path.home() / 'Documents/Jini/2026/Phonics/phonics-kit/tools/word_marks.py'),
+                            f'{td}/in.json', f'{td}/out.json'], check=True)
+            marks = json.loads(pathlib.Path(td, 'out.json').read_text())
+            for it in items:
+                pathlib.Path(it['file']).with_suffix('.json').write_text(json.dumps(marks.get(it['file'], [])))
+    return len(todo)
+
+
+got = asyncio.run(fetch_all()) if ENGINE == 'edge' else fetch_tutor() if ENGINE == 'tutor' else fetch_api()
 print(f'downloaded {got} new · cache {CACHE}')
 OUT.mkdir(parents=True, exist_ok=True)
 for f in OUT.glob('*.mp3'):
@@ -255,11 +292,14 @@ for i, t in LINES.items():
 
 TS.write_text(
     '// Generated by tools/build_glee_voice.py - do not edit. Glee\'s tutor lines (public/gl/voice/<id>.mp3).\n' +
-    (f'// Voice: {VOICE} {PITCH} {RATE} via edge-tts (prototype only).\n' if ENGINE == 'edge' else
+    ('// Voice: the phonics games\' one tutor voice — Azure en-US-AvaMultilingualNeural via the company phonics-api, shaped to\n'
+     '// the old aiden (pitch x1.109, speed x1.035; phonics-kit tts_voice.tutor), every take read back (user 2026-11-22).\n'
+     if ENGINE == 'tutor' else
+     f'// Voice: {VOICE} {PITCH} {RATE} via edge-tts (prototype only).\n' if ENGINE == 'edge' else
      f'// Voice: {VOICE} via the company phonics-api TTS (Azure), pitch x{PITCH_K} + {RATE} applied by ffmpeg (user pick C, 2026-11-19).\n') +
     'export type VoiceLine = { text: string; start: number; dur: number; gain: number; mouth: string; words: [string, number, number][] };\n'
     f'export const GLEE_VOICE: {{ voice: string; mouthMs: number; lines: Record<string, VoiceLine> }} = {{\n'
-    f'  voice: {json.dumps(VOICE if ENGINE == "edge" else VOICE + "-api")}, mouthMs: {MOUTH_MS},\n'
+    f'  voice: {json.dumps("tutor-ava-aiden" if ENGINE == "tutor" else VOICE if ENGINE == "edge" else VOICE + "-api")}, mouthMs: {MOUTH_MS},\n'
     '  lines: {\n' + ',\n'.join(f'    {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}' for k, v in lines.items()) + ',\n  },\n};\n',
     encoding='utf-8')
 no_marks = [k for k, v in lines.items() if not v['words']]

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import './gl/apiSR';   // SpeechRecognition on phonics-api when this device has a key (phonics-kit rule)
+import './progress';   // the shared progress record (phonics-kit phonics-progress.js, imports './vendor/phonics-progress.js')
 import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { gameAudio } from './audio';

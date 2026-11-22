@@ -9,7 +9,9 @@ import { gameAudio } from '../audio';
 import { Glee } from './glee';
 import { Mashup } from './mashup';
 import { Reward, type Gain, type Kind } from './reward';
-import { Tutor } from './tutor';
+import { Tutor, type SayEnd } from './tutor';
+import { JumpButton } from './jump';
+import { run as progressRun } from '../progress';
 import { GATE_UV, Stage, type Quality } from './stage';
 import { ARRIVE_AT, Travel } from './travel';
 import { Zone3D } from './zone3d';
@@ -54,6 +56,15 @@ const state = {
   reward: null as Reward | null,
   /** while set, GameScene's countUp/bumpBadge are held back for the reward to replay when its icons arrive */
   rewardHold: null as null | { calls: [Any, number, number][] },
+  /** a won round's reward (stars, coins, gems, its Compound Book card) waiting for Glee's say-it turn: paid only when
+   *  the child says the word (phonics-kit common rule, user 2026-11-22) */
+  sayReward: null as null | { round: number; pay: () => void },
+  /** a say-it turn that ended before its round's win came in */
+  sayVerdict: null as null | { round: number; ok: boolean },
+  /** the JUMP button of the say-it turn (with the tutor) */
+  jump: null as JumpButton | null,
+  /** the won round's result card (the JUMP button perches on it) */
+  resultCard: null as Any,
   game: null as Phaser.Game | null,
   /** a press that landed on Glee: GameScene must not pick a card with it */
   gleePress: false,
@@ -170,6 +181,7 @@ function attach(scene: Any) {
   state.cards!.clear();
   state.travel?.cancel();
   state.travelHide = false;
+  state.sayReward = null; state.sayVerdict = null; state.resultCard = null;
   // between rounds: fly to the next place instead of sliding the new cards in
   const startRound = scene.startRound;
   if (!startRound.__wm3d) {
@@ -283,6 +295,8 @@ function wireReward(scene: Any) {
     return bump.call(scene, txt);
   };
   const rw = function (this: Any, card: Any) {
+    state.resultCard = card;
+    if (state.on && state.tutor?.enabled) return holdForSay(card);
     if (!state.on || reducedMotion() || !state.reward) return win.call(scene, card);
     const hold = { calls: [] as [Any, number, number][] };
     state.rewardHold = hold;
@@ -311,6 +325,45 @@ function wireReward(scene: Any) {
       for (const g of gains) g.arrive();
     }
   };
+  // With Glee's say-it turn the word's reward waits for it (phonics-kit common rule, user 2026-11-22: JUMP, two wrong
+  // tries, quiet or nothing to judge -> no reward): GameScene.onRoundWin runs as before (progress bar, the result
+  // card's timer that Glee holds), but its score / coin / gem count-ups are held and the scene's numbers put back,
+  // and its Compound Book card is not stored yet. pay() adds them and plays the reward from the result card.
+  const holdForSay = (card: Any) => {
+    const FIELDS = [['score', 'score', 'scoreText'], ['coin', 'coins', 'coinText'], ['gem', 'gems', 'gemText']] as const;
+    const before = FIELDS.map(([, f]) => scene[f] as number);
+    let book: string | null = null;
+    scene.addCollected = (r: string) => { book = r; };
+    const hold = { calls: [] as [Any, number, number][] };
+    state.rewardHold = hold;
+    try { win.call(scene, card); } catch (err) { state.rewardHold = null; throw err; } finally { delete scene.addCollected; }
+    scene.time.delayedCall(220, () => { if (state.rewardHold === hold) state.rewardHold = null; });
+    const delta = FIELDS.map(([, f], i) => (scene[f] as number) - before[i]);
+    FIELDS.forEach(([, f], i) => { scene[f] = before[i]; });
+    const round = scene.roundIndex;
+    const pay = () => {
+      if (!scene.sys.isActive()) return;
+      if (book) scene.addCollected(book);
+      const gains: Gain[] = [];
+      FIELDS.forEach(([kind, f, t], i) => {
+        if (!delta[i]) return;
+        const txt = scene[t], from = scene[f] as number, to = from + delta[i];
+        scene[f] = to;
+        const k = parseFloat(String(txt?.style?.fontSize ?? '22')) / 22;      // the HUD's sz() scale
+        gains.push({
+          kind: kind as Kind, amount: delta[i],
+          hud: txt?.active ? { x: txt.x - 76 * k, y: txt.y, size: 46 * k } : null,
+          arrive: () => { if (!txt?.active || !scene.sys.isActive()) return; countUp.call(scene, txt, from, to); bump.call(scene, txt); },
+        });
+      });
+      if (!state.on || reducedMotion() || !state.reward || !card?.active) { for (const g of gains) g.arrive(); return; }
+      try { state.reward.play(card, gains, state.glee?.screenBox() ?? null); } catch (err) { console.warn('[wm3d] reward', err); for (const g of gains) g.arrive(); }
+    };
+    const v = state.sayVerdict;
+    state.sayVerdict = null;
+    if (v && v.round === round) { if (v.ok) pay(); return; }
+    state.sayReward = { round, pay };
+  };
   for (const [name, f] of [['countUp', cu], ['bumpBadge', bb], ['onRoundWin', rw]] as const) {
     // __wm3d too: on every attach the stopReveal/hold wrapper checks it, and must not wrap this one again
     // (it did after a Replay: every win then played the reward twice, the outer play broke the inner one)
@@ -322,6 +375,25 @@ function wireReward(scene: Any) {
 
 function reducedMotion() {
   return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Glee's say-it turn of `round` ended: pay that round's held reward only when the word was said. A turn cut short (a
+ *  Replay, the 2D fallback) settles nothing. */
+function sayDone(round: number, ok: boolean, why: SayEnd) {
+  if (why !== 'cut') { progressRun.sayTurns++; if (ok) progressRun.said++; }
+  const p = state.sayReward;
+  if (p && p.round === round) { state.sayReward = null; if (ok) p.pay(); return; }
+  if (why !== 'cut') state.sayVerdict = { round, ok };
+}
+
+/** the JUMP button perches on the result card's top-right corner (Match: on the say bubble's), sized with the HUD */
+function placeJump(s: Any) {
+  const jb = state.jump!, c = state.resultCard, game = state.game!;
+  let gx: number, gy: number;
+  if (c?.active) { const b = c.getBounds(); gx = b.right - b.width * 0.12; gy = b.top + b.height * 0.03; }
+  else { gx = s.cx + s.zoneR * 0.8; gy = s.cy - s.zoneR * 0.9; }
+  const r = game.canvas.getBoundingClientRect(), k = r.width / game.scale.width;
+  jb.place(r.left + gx * k, r.top + gy * k, 66 * Math.min(s.gw / 1280, s.gh / 720) * k, { x: gx, y: gy });
 }
 
 // The card collision, after the intro video (replaces GameScene.playImpact's flash, 2D rays, poof,
@@ -537,6 +609,7 @@ function frame(game: Phaser.Game) {
   state.zone!.update(t, dt, s.zoneGfx?.alpha ?? 1, pxPerUnit);
   state.travel!.update(dt);
   if (DEMO_FLY && !state.travel!.active) flyDemo(stage, t);
+  if (state.jump?.shown) placeJump(s);
   if (state.glee) {
     if (gleeDrag && gleeDrag.mode === 'press' && now - gleeDrag.t0 >= LONG_PRESS) pickUpGlee();
     placeGlee(s, dt);
@@ -617,8 +690,14 @@ function giveUp(reason: string) {
   state.glee = null;
   state.mashup?.dispose();
   state.mashup = null;
+  // 2D has no say-it turn: a reward still waiting for one is paid
+  const held = state.sayReward;
+  state.sayReward = null;
+  held?.pay();
   state.tutor?.dispose();
   state.tutor = null;
+  state.jump?.dispose();
+  state.jump = null;
   state.stage?.dispose();
   state.stage = null;
   // 2D only for this tab session; the next visit tries 3D again (at low after a slow give-up)
@@ -814,10 +893,14 @@ export function start3D(game: Phaser.Game) {
         state.glee = new Glee(stage);
         state.glee.runClock = () => (travel.active ? travel.elapsed() : null);
         if (qs.get('tutor') !== 'off') {
+          state.jump = new JumpButton();
+          state.jump.placer = () => { if (state.scene) placeJump(state.scene); };
           state.tutor = new Tutor(state.glee, {
             glow: (card: Any) => state.cards?.hint(card),
             showHint: () => state.scene?.showHint(),
             bgm: () => (gameAudio as Any).bgmEl ?? null,
+            said: sayDone,
+            jump: state.jump,
           });
         }
       }
