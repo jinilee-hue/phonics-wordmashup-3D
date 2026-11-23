@@ -896,14 +896,15 @@ export class Tutor {
       this.readyRound = s.roundIndex;
       this.roundReady(s.roundIndex);
     }
-    // quiet for a while: point at a card, later the full hint
+    // quiet for a while: point at a card, later the full hint (the game level may wait longer: GameScene.idleHelp)
     if (playable && !this.job && !s.dragCard && !s.collectionOpen) {
       this.idle += dt;
       const pair = this.pair();
-      if (pair && this.idleStage === 0 && this.idle > IDLE_POINT) {
+      const [point, hint] = s.idleHelp ?? [IDLE_POINT, IDLE_HINT];
+      if (pair && this.idleStage === 0 && this.idle > point) {
         this.idleStage = 1;
         this.run(1, 'idle', async j => { await this.pointHelp(j, pair); });
-      } else if (this.idleStage === 1 && this.idle > IDLE_HINT - IDLE_POINT) {
+      } else if (this.idleStage === 1 && this.idle > hint - point) {
         this.idleStage = 2;
         this.hooks.showHint();
       }

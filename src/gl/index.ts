@@ -514,7 +514,7 @@ function placeSkip(s: Any) {
 // fly the camera through the zone to the gate, then let the cards fly out of the gate.
 function beginTravel(scene: Any) {
   const stage = state.stage!, travel = state.travel!, cards = state.cards!;
-  const order = [0, 1, 2].flatMap(i => [scene.leftCards[i], scene.rightCards[i]]).filter(Boolean);
+  const order = scene.leftCards.flatMap((c: Any, i: number) => [c, scene.rightCards[i]]).filter(Boolean);   // cards per side: the level's
   for (const c of order) {
     for (const tw of scene.tweens.getTweensOf(c)) {
       if (tw.data?.some((d: Any) => d?.key === 'x')) tw.stop();      // the 2D slide-in
@@ -679,7 +679,8 @@ function frame(game: Phaser.Game) {
   }
   if (state.tutor) {
     const live = [...(s.leftCards ?? []), ...(s.rightCards ?? [])].filter((c: Any) => c?.active);
-    const open = !s.busy && !state.travel!.active && live.length === 6 && !document.getElementById('intro-overlay');
+    const dealt = (s.leftCards?.length ?? 0) + (s.rightCards?.length ?? 0);   // the level's card count
+    const open = !s.busy && !state.travel!.active && dealt > 0 && live.length === dealt && !document.getElementById('intro-overlay');
     const settled = open && live.every((c: Any) => state.cards!.isReady(c) && Math.abs(c.x - c.baseX) < 2 && !c.inZone);
     state.tutor.update(dt, settled, open);
   }

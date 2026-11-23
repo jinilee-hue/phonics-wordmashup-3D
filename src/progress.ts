@@ -5,6 +5,7 @@
 // no level select (user: "기록 저장만"). Hooked on GameScene's prototype, so the 2D game records too (no say-it turns there).
 // Gems stay on the device (GameScene 'wm.gems.v1'): the line keeps this game's gems earned, the gems spent on Compound Book
 // '?' cards and the cards opened (user 2026-11-22). A card opened on the result screen, after the line, is added to it.
+// The line also keeps the game level played (GameScene LEVELS, never picked); the record's level is the next START's.
 import './vendor/phonics-progress.js';
 import { GameScene } from './scenes/GameScene';
 
@@ -31,11 +32,13 @@ P.showFinale = function (this: Any, ...a: Any[]) {
       time: Math.round((performance.now() - run.t0) / 100) / 10,
       misses: run.misses, won: this.hearts > 0,
       hearts: this.hearts, coinsSpent: this.coinsSpent,
-      gemsSpent: this.gemsSpent, cardsOpened: this.cardsOpened.length,
+      gemsSpent: this.gemsSpent, cardsOpened: this.cardsOpened.length, level: this.level,
     }, { higher: ['said', 'gems', 'hearts'] });
     run.at = rec?.history?.[0]?.at ?? '';
   } catch (err) { console.warn('[progress]', err); }
-  return finale.apply(this, a);
+  const out = finale.apply(this, a);   // GameScene.judgeLevel sets levelNext
+  try { window.PhonicsProgress?.setLevel('word-mashup', this.levelNext); } catch (err) { console.warn('[progress]', err); }
+  return out;
 };
 P.buyCard = function (this: Any, ...a: Any[]) {
   const ok = buyCard.apply(this, a);

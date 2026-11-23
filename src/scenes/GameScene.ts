@@ -4,9 +4,32 @@ import { pickRoundPairs, COMPOUND_PAIRS, type CompoundPair } from '../data/compo
 import { gameAudio } from '../audio';
 
 const ROUNDS = 6;
-const HEARTS = 3;      // a wrong pair costs one; none left ends the game (user 2026-11-22: a game needs a cost)
 const HINT_COST = 5;   // coins for the Hint button (Glee's own idle help stays free)
 const CARD_GEMS = 5;   // gems to open a '?' card in the Compound Book (user 2026-11-22: what a game collects needs a use)
+/** Game levels (phonics-kit README "공통 규칙: 레벨", user 2026-11-22). Never picked: START goes on at the saved level
+ *  (localStorage LEVEL_KEY). A good game (all 6 words, 2+ hearts left) -> +1; a poor one (out of hearts, or 3 words or
+ *  fewer) -> the same level, and two poor games in a row -> one down; any other game -> the same level.
+ *  cards: on screen (half on each side, LAYOUTS). hearts: a wrong pair costs one, none left ends the game.
+ *  idle: Glee's idle help (tutor.ts): she points at a card after idle[0] s of quiet, and the hint follows
+ *  idle[1] - idle[0] s after her pointing ends (15/28 = about 15 s and 31 s; 25/42 = about 25 s and 45 s). */
+const LEVELS = [
+  { cards: 4,  hearts: 3, idle: [15, 28] },
+  { cards: 6,  hearts: 3, idle: [15, 28] },   // the game before levels
+  { cards: 8,  hearts: 3, idle: [15, 28] },
+  { cards: 8,  hearts: 3, idle: [25, 42] },   // Glee helps later
+  { cards: 10, hearts: 3, idle: [25, 42] },
+  { cards: 10, hearts: 2, idle: [25, 42] },
+] as const;
+/** Card slots per side by cards per side: [x, y, angle] in design px (1280 x 720, card centre, y before startRound's +30);
+ *  the right side mirrors the left. k = card size against the 6-card game. Checked at 1280x720, 1280x800 and 1024x768
+ *  (3D outlines, the float included): no card on another card, the HUD or its LEVEL chip, the Gravity Zone, the bottom
+ *  buttons, Glee's spot or the explanation's SKIP. */
+const LAYOUTS: Record<number, { k: number; slots: [number, number, number][] }> = {
+  2: { k: 1,    slots: [[310, 235, -4], [160, 440, -8]] },
+  3: { k: 1,    slots: [[209, 185, -8], [359, 345, -4], [153, 500, -12]] },   // the game before levels
+  4: { k: 0.9,  slots: [[118, 223, -8], [288, 225, -4], [118, 490, -12], [284, 450, -6]] },
+  5: { k: 0.74, slots: [[98, 219, -8], [237, 201, -6], [370, 364, -4], [104, 487, -12], [234, 424, -8]] },
+};
 
 export class GameScene extends Phaser.Scene {
   // Dynamic screen dimensions — set in create()
@@ -43,7 +66,14 @@ export class GameScene extends Phaser.Scene {
     this.gemBank = Math.max(0, Math.round(v) || 0);
     try { localStorage.setItem(GameScene.GEMS_KEY, String(this.gemBank)); } catch { /* blocked: this page only */ }
   }
-  private hearts = HEARTS;
+  private hearts: number = LEVELS[0].hearts;
+  /** this game's level (1..6, LEVELS), the poor games in a row at it, and the next game's level (set at the end) */
+  private level = 1;
+  private poorRun = 0;
+  private levelNext = 1;
+  private get lv() { return LEVELS[this.level - 1]; }
+  /** Glee's idle help for this level (tutor.ts reads it) */
+  get idleHelp() { return this.lv.idle; }
   private coinsSpent = 0;
   /** this game's gems at the start, the gems spent and the '?' cards opened with them (progress.ts records them) */
   private gemsAtStart = 0;
@@ -91,6 +121,7 @@ export class GameScene extends Phaser.Scene {
   private micLabel?: Phaser.GameObjects.Text;
   private static readonly COLLECTED_KEY = 'phonics_collected_v1';
   private static readonly GEMS_KEY = 'wm.gems.v1';
+  private static readonly LEVEL_KEY = 'wm.level.v1';
 
   constructor() { super({ key: 'Game' }); }
 
@@ -160,7 +191,8 @@ export class GameScene extends Phaser.Scene {
     this.gemsSpent = 0;
     this.cardsOpened = [];
     this.gemLifts = 0;
-    this.hearts = HEARTS;
+    this.loadLevel();                 // START (and Next Play / Replay) goes on at the saved level
+    this.hearts = this.lv.hearts;
     this.coinsSpent = 0;
     this.badgeInfo = {};
     this.hintParts = []; this.hintGrey = []; this.hintOff = null;
@@ -430,6 +462,14 @@ export class GameScene extends Phaser.Scene {
       useHandCursor: true,
     });
     bookHit.on('pointerdown', () => this.showCollection());
+
+    // LEVEL chip under the bar's right end, in the bar's look - display only (the level is never picked)
+    const lvW = sz(80), lvH = sz(24), lvX = pillX + pillW - lvW, lvY = topY + bodyH + sz(8);
+    this.add.image(lvX + lvW / 2, lvY + lvH / 2 + sz(3), 'hud_bar_main').setDisplaySize(lvW, lvH).setDepth(50);
+    this.add.image(lvX + lvW / 2, lvY + lvH / 2, 'hud_bar_pill').setDisplaySize(lvW, lvH).setDepth(51);
+    this.add.text(lvX + lvW / 2, lvY + lvH / 2, `LEVEL ${this.level}`, {
+      fontFamily: '"Inter", "Baloo 2"', fontSize: `${sz(14)}px`, color: '#FFFFFF', fontStyle: 'bold',
+    }).setOrigin(0.5).setDepth(52);
 
     // ── 오른쪽 그룹: 배지 3 + 설정. 오른쪽 끝 기준(오른쪽 여백 = 왼쪽 back), 간격 sz(12) ──
     const bW = sz(152), bH = bodyH;
@@ -1256,7 +1296,8 @@ export class GameScene extends Phaser.Scene {
 
     // ── 보기 카드 선택 ──────────────────────────────────────────────
     // 규칙: (1) 보여지는 좌/우 카드로 만들 수 있는 실제 합성어는 정답 1개뿐,
-    //       (2) 좌/우 각각 중복 단어 없음.
+    //       (2) 좌/우 각각 중복 단어 없음. 한쪽 카드 수 n은 레벨(LEVELS.cards / 2).
+    const n = this.lv.cards / 2;
     const validSet = new Set(COMPOUND_PAIRS.map(p => `${p.word1} ${p.word2}`));
     const isCompound = (a: string, b: string) => validSet.has(`${a} ${b}`);
     const iconW1 = new Map(COMPOUND_PAIRS.map(p => [p.word1, p.icon1] as const));
@@ -1265,18 +1306,18 @@ export class GameScene extends Phaser.Scene {
     const allW2 = [...new Set(COMPOUND_PAIRS.map(p => p.word2))];
     const shuffle = <T,>(arr: T[]) => [...arr].sort(() => Math.random() - 0.5);
 
-    // 좌측: 정답 word1 + distractor 2개(정답 word2와 합쳐도 합성어가 아닌 것, 중복 없음)
+    // 좌측: 정답 word1 + distractor n-1개(정답 word2와 합쳐도 합성어가 아닌 것, 중복 없음)
     const leftWords = [pair.word1];
     for (const w of shuffle(allW1)) {
-      if (leftWords.length >= 3) break;
+      if (leftWords.length >= n) break;
       if (leftWords.includes(w)) continue;
       if (isCompound(w, pair.word2)) continue;      // 정답 우측과 또 다른 조합이 되면 제외
       leftWords.push(w);
     }
-    // 우측: 정답 word2 + distractor 2개(어떤 좌측 카드와도 합성어가 안 되는 것, 중복 없음)
+    // 우측: 정답 word2 + distractor n-1개(어떤 좌측 카드와도 합성어가 안 되는 것, 중복 없음)
     const rightWords = [pair.word2];
     for (const w of shuffle(allW2)) {
-      if (rightWords.length >= 3) break;
+      if (rightWords.length >= n) break;
       if (rightWords.includes(w)) continue;
       if (leftWords.some(l => isCompound(l, w))) continue;  // 좌측(정답 포함) 어느 것과도 조합 불가
       rightWords.push(w);
@@ -1286,16 +1327,17 @@ export class GameScene extends Phaser.Scene {
     const rightData = shuffle(rightWords.map(w => ({ word: w, icon: iconW2.get(w) ?? '' })));
 
     const s = Math.min(GW / 1280, GH / 720);   // 화면 균일 배율
-    const CARD_SCALE = 0.972 * 0.8 * s;        // 카드 크기 80%로 축소 + 화면 균일 배율(태블릿 대응)
+    const lay = LAYOUTS[n];
+    const CARD_SCALE = 0.972 * 0.8 * s * lay.k;   // 카드 크기 80%로 축소 + 화면 균일 배율(태블릿 대응) + 카드 수별 배율
     // Figma-matched staggered positions (Figma canvas: 1280×720)
     // Values are card CENTER coordinates
     const pf = (fx: number) => Math.round(fx * GW / 1280);
     const qf = (fy: number) => Math.round(fy * GH / 720);
 
-    const leftPos  = [{ x: 209, y: 185 }, { x: 359, y: 345 }, { x: 153, y: 500 }];
+    const leftPos  = lay.slots.map(([x, y]) => ({ x, y }));   // 카드 수별 자리(LAYOUTS; 6장 = 레벨 전과 같음)
     // 오른쪽 = 왼쪽의 좌우 대칭(사용자: "왼쪽과 대칭 되게 배치하면 될거 같아"). 원래: x 1139/950/1060, y 175/360/510, 각도 10/4/8
     const rightPos = leftPos.map(p => ({ x: 1280 - p.x, y: p.y }));
-    const leftAngle  = [-8, -4, -12];
+    const leftAngle  = lay.slots.map(([, , a]) => a);
     const rightAngle = leftAngle.map(a => -a);
 
     const makeCard = (figX: number, figY: number, angle: number, slotIdx: number, word: string, icon: string, side: 'left' | 'right') => {
@@ -2324,7 +2366,7 @@ export class GameScene extends Phaser.Scene {
 
     const rows: { kind: string; icon: string; name: string; color: number; earn: string; spend: string }[] = [
       { kind: 'heart', icon: 'icon_heart', name: 'Heart', color: 0xE8335A,
-        earn: `You start with ${HEARTS} hearts`,
+        earn: `You start with ${this.lv.hearts} hearts`,
         spend: 'A wrong pair: −1  ·  No hearts left: the game ends (you keep what you got)' },
       { kind: 'score', icon: 'icon_star',  name: 'Star',   color: 0xF5B301,
         earn: 'Make a word: +10',
@@ -2486,6 +2528,7 @@ export class GameScene extends Phaser.Scene {
   private showFinale() {
     const { gw: GW, gh: GH, cx: CX, cy: CY } = this;
     const s = Math.min(GW / 1280, GH / 720);
+    this.judgeLevel();
 
     const dim = this.add.graphics().setDepth(70).setAlpha(0);
     dim.fillStyle(0x150B33, 0.82);
@@ -2755,6 +2798,7 @@ export class GameScene extends Phaser.Scene {
 
     const btnDelay = 360 + ROUNDS * 140 + 300;
     this.tweens.add({ targets: btnCont, alpha: 1, duration: 300, delay: btnDelay });
+    if (this.levelNext > this.level) this.showLevelUp(CX, bookCY - bookH / 2, s, btnDelay - 200);
 
     const hit = this.add.graphics().setDepth(76).setAlpha(0.001);
     hit.fillRect(CX - bW / 2, bCY - bH / 2, bW, bH);
@@ -2765,6 +2809,67 @@ export class GameScene extends Phaser.Scene {
         this.cameras.main.fadeOut(300, 0, 0, 0);
         this.cameras.main.once('camerafadeoutcomplete', () => this.scene.restart());
       });
+    });
+  }
+
+  // ── Level (LEVELS; phonics-kit "공통 규칙: 레벨") ─────────────────────
+
+  private loadLevel() {
+    let level = 1, poor = 0;
+    try {
+      const v = JSON.parse(localStorage.getItem(GameScene.LEVEL_KEY) || 'null');
+      if (v && Number.isFinite(v.level)) level = Math.round(v.level);
+      if (v && Number.isFinite(v.poor)) poor = Math.round(v.poor);
+    } catch { /* blocked or broken: level 1 */ }
+    this.level = Math.min(LEVELS.length, Math.max(1, level));
+    this.poorRun = Math.max(0, poor);
+    this.levelNext = this.level;
+  }
+
+  /** The game is over (showFinale): good -> +1, poor -> the same (two in a row -> -1), else the same. Saved for the next START. */
+  private judgeLevel() {
+    const words = Math.min(this.queue.length, this.roundIndex);
+    const good = words >= ROUNDS && this.hearts >= 2;
+    const poor = this.hearts <= 0 || words <= 3;
+    let level = this.level, run = 0;
+    if (good) level = Math.min(LEVELS.length, level + 1);
+    else if (poor && ++this.poorRun >= 2) level = Math.max(1, level - 1);
+    else if (poor) run = this.poorRun;
+    this.levelNext = level;
+    try { localStorage.setItem(GameScene.LEVEL_KEY, JSON.stringify({ level, poor: run })); } catch { /* blocked: this page only */ }
+  }
+
+  /** "LEVEL UP!" and the HUD's LEVEL chip with the new number, on the result book's top edge (screen text only) */
+  private showLevelUp(x: number, y: number, s: number, delay: number) {
+    const h = Math.round(s * 56), off = Math.round(s * 5);
+    const label = this.add.text(0, 0, 'LEVEL UP!', {
+      fontFamily: '"Baloo 2"', fontSize: `${Math.round(h * 0.6)}px`, color: '#FFFFFF', fontStyle: 'bold',
+      stroke: '#B35C00', strokeThickness: Math.max(2, Math.round(s * 5)),
+    }).setOrigin(0, 0.5);
+    const cW = Math.round(s * 116), cH = Math.round(s * 36);
+    const pad = Math.round(h * 0.42), gap = Math.round(s * 12);
+    const w = pad + label.width + gap + cW + Math.round(pad * 0.6);
+    const g = this.add.graphics();
+    g.fillStyle(0x000000, 0.28); g.fillRoundedRect(-w / 2 + off, -h / 2 + off * 2, w, h, h / 2);
+    g.fillStyle(0xC46E00, 1);    g.fillRoundedRect(-w / 2, -h / 2 + off, w, h, h / 2);
+    g.fillStyle(0xFFB524, 1);    g.fillRoundedRect(-w / 2, -h / 2, w, h, h / 2);
+    g.fillStyle(0xFFD866, 1);    g.fillRoundedRect(-w / 2 + off, -h / 2 + off * 0.6, w - off * 2, h * 0.46, h * 0.23);
+    g.lineStyle(Math.max(2, Math.round(s * 3)), 0xFFFFFF, 0.6); g.strokeRoundedRect(-w / 2, -h / 2, w, h, h / 2);
+    label.setX(-w / 2 + pad);
+    const chipX = w / 2 - Math.round(pad * 0.6) - cW / 2;
+    const chipBase = this.add.image(chipX, Math.round(s * 3), 'hud_bar_main').setDisplaySize(cW, cH);
+    const chip = this.add.image(chipX, 0, 'hud_bar_pill').setDisplaySize(cW, cH);
+    const num = this.add.text(chipX, 0, `LEVEL ${this.levelNext}`, {
+      fontFamily: '"Inter", "Baloo 2"', fontSize: `${Math.round(cH * 0.5)}px`, color: '#FFFFFF', fontStyle: 'bold',
+    }).setOrigin(0.5);
+    const cont = this.add.container(x, y, [g, label, chipBase, chip, num]).setDepth(74).setScale(0).setAlpha(0);
+    this.tweens.add({
+      targets: cont, scaleX: 1, scaleY: 1, alpha: 1, duration: 420, ease: 'Back.easeOut', delay,
+      onStart: () => gameAudio.playBurst(),
+      onComplete: () => {
+        this.burst.setPosition(x, y); this.burst.explode(30);
+        this.tweens.add({ targets: cont, scaleX: 1.06, scaleY: 1.06, duration: 260, yoyo: true, repeat: 1, ease: 'Sine.easeInOut' });
+      },
     });
   }
 

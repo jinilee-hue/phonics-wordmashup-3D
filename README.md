@@ -14,7 +14,7 @@
 ## 화면과 조작
 
 - **인트로**: 영상이 나오고 2초 뒤 SKIP, 영상이 끝나면 START. 한 번 누르면 소리가 켜져요.
-- **카드**: 왼쪽 세 장(앞 단어), 오른쪽 세 장(뒤 단어). 한 장씩 끌어 가운데 원에 놓고, 양쪽이 다 들어가면 판정해요. 보이는 카드로 만들 수 있는 합성어는 정답 하나뿐이에요(`src/scenes/GameScene.ts` `startRound`). 틀리면 ✗와 함께 두 카드가 제자리로 돌아가요.
+- **카드**: 왼쪽(앞 단어)과 오른쪽(뒤 단어)에 같은 수 — 레벨에 따라 2~5장씩(아래 "레벨"). 한 장씩 끌어 가운데 원에 놓고, 양쪽이 다 들어가면 판정해요. 보이는 카드로 만들 수 있는 합성어는 정답 하나뿐이에요(`src/scenes/GameScene.ts` `startRound`). 틀리면 ✗와 함께 두 카드가 제자리로 돌아가요.
 - **아래 버튼 줄**: Replay(새 게임) · Mic(두 단어를 말하면 카드가 들어감, 다시 누르면 취소) · Hint(정답 두 장을 빛내고 나머지를 흐리게, 3D에선 글리가 가리키며 이름을 말함) · Home(새로 고침 → 인트로).
 - **위**: Compound Book(모은 합성어 도감) · 별/코인/보석 배지(누르면 설명) · 톱니(Settings: Music, Sounds, Speech server key).
 - **글리**: 톡 누르면 말하고 뛰어요. 끌면 돌고, 길게(0.45초) 눌러 끌면 자리를 옮겨요(README-3D.md "글리 옮기기").
@@ -24,6 +24,13 @@
 - 한 게임 6라운드(`ROUNDS`), 합성어 43쌍(`src/data/compounds.ts`)에서 무작위로 골라요. 위쪽에 `1 / 6` 진행.
 - 한 라운드: 카드가 날아와 앉음 → 글리가 묻고 들음 → 정답이면 충돌 연출과 합성어 카드 → 글리 "Pan and cake make... pancake!" → **말하기 차례** → 칭찬 → 공간 이동(3D) → 다음 라운드.
 - 6라운드가 끝나면 그 게임에서 만든 단어를 펼친 Compound Book과 Next Play(새 게임).
+
+## 레벨 (파닉스 공통 규칙, 사용자 2026-11-22)
+
+- **고르지 않아요.** START·Next Play·Replay는 저장된 레벨(localStorage `wm.level.v1` `{level, poor}`)부터 해요. 새 기기는 레벨 1.
+- 게임이 끝나면 정해요(`GameScene.judgeLevel`): **잘함**(6단어 모두 + 하트 2개 이상) → +1, 결과 화면 책 위에 "LEVEL UP!"과 새 레벨. **못함**(하트가 다 떨어짐, 또는 3단어 이하) → 같은 레벨, 두 번 연속이면 한 칸 내려가요. 그 밖에는 같은 레벨.
+- 표(`LEVELS`): 1 = 카드 4장 · 2 = 6장(레벨 전 게임) · 3 = 8장 · 4 = 8장 + 글리의 쉴 때 도움이 늦게(25초 / 약 45초) · 5 = 10장 · 6 = 10장 + 하트 2개. 카드 자리는 장수별 `LAYOUTS`(8장 0.9배, 10장 0.74배 크기), 1280×720·1280×800·1024×768에서 겹치지 않게 맞춤.
+- 화면: 위 Compound Book 막대 오른쪽 아래 `LEVEL n` 칩(표시만).
 
 ## 보상
 
@@ -37,7 +44,7 @@
 - 말풍선 없이 목소리로만 게임을 이끌어요. 한 번에 한 명만 말하고, 아이가 카드를 잡으면 말을 멈추고 그 카드를 읽어 줘요.
 - 방문의 첫 게임은 인사 뒤에 **설명**(아래 "첫 게임 설명"), 다음 게임부터는 "Let's play again!". 라운드마다 "Which two go together?" 하고 들어요. 합성어를 말하면 두 장을 다 넣고, 카드 단어 하나를 말하면 그 카드를 넣고 "What goes with pan?" 하고 다시 들어요. 카드로 해도 돼요.
 - 틀린 쌍은 목소리로 안내해요: 두 카드를 읽고 "That's not a word!" → 한 장이 맞았으면 그 카드를 다시 넣고 짝을 물어요. 둘 다 틀리면 1번째 "Let's try again!", 2번째 첫 카드를 넣어 주고 짝을 묻고, 3번째 힌트. Mic 버튼의 안내 토스트도 글리 목소리로 바뀌어요.
-- 15초 동안 아무것도 안 하면 카드 하나를 가리키고, 28초면 힌트를 보여 줘요.
+- 15초 동안 아무것도 안 하면 카드 하나를 가리키고, 약 31초면 힌트를 보여 줘요(레벨 4부터 25초 / 약 45초, `LEVELS.idle`).
 - 목소리: 파닉스 게임 공통 튜터 목소리(phonics-api TTS, Azure `en-US-AvaMultilingualNeural`을 예전 'aiden' 높이·빠르기로 맞춤). 영어 430줄. `uv run --quiet --with numpy python tools/build_glee_voice.py`(키 `~/.config/phonics-api/key`) → `public/gl/voice/`, `src/gl/gleeVoice.ts`.
 
 ## 말하기 차례 (파닉스 공통 규칙, `src/gl/tutor.ts` `sayTurn`)
@@ -85,8 +92,8 @@
 
 ## 기록
 
-- 게임이 끝나면(6라운드 뒤) 파닉스 게임 공통 기록(localStorage `phonics.progress`)에 `word-mashup` 한 줄: 만든 단어 수, 말하기 통과 수(`said`)·차례 수(`sayTurns`), 별·코인·그 게임에서 번 보석, 보석으로 연 카드(`gemsSpent`·`cardsOpened`, 결과 화면에서 연 것도 그 줄에 더함), 시간, 틀린 쌍 수(`src/progress.ts`, phonics-kit `phonics-progress.js` 복사본). 기록만 하고 레벨 선택은 없어요. 2D도 기록해요(말하기 차례 없음).
-- 그 밖의 localStorage: `phonics_collected_v1`(도감), `wm.gems.v1`(보석), `wm3d-glee-spot-v1`(글리 자리), `wm3d-quality-v2`(자동 품질), `phonics_api_key`.
+- 게임이 끝나면(6라운드 뒤) 파닉스 게임 공통 기록(localStorage `phonics.progress`)에 `word-mashup` 한 줄: 만든 단어 수, 말하기 통과 수(`said`)·차례 수(`sayTurns`), 별·코인·그 게임에서 번 보석, 보석으로 연 카드(`gemsSpent`·`cardsOpened`, 결과 화면에서 연 것도 그 줄에 더함), 시간, 틀린 쌍 수(`src/progress.ts`, phonics-kit `phonics-progress.js` 복사본). 그 게임의 레벨(`level`)도 적고, 공통 기록의 `level`(`setLevel`)은 다음 START의 레벨이에요. 레벨 선택은 없어요. 2D도 기록해요(말하기 차례 없음).
+- 그 밖의 localStorage: `phonics_collected_v1`(도감), `wm.gems.v1`(보석), `wm.level.v1`(레벨), `wm3d-glee-spot-v1`(글리 자리), `wm3d-quality-v2`(자동 품질), `phonics_api_key`.
 
 ## 도구
 
@@ -99,6 +106,8 @@
 | `tools/qa/` | 헤드리스 QA — 목록은 `tools/qa/README.md` |
 
 `tools/qa/tutor_flow.py`와 그 `FAKE_SR`를 가져다 쓰는 `tutor_guide.py`, `tools/qa/api_sr.py`는 **지금 코드와 맞지 않아요**. 앞의 둘은 브라우저 `SpeechRecognition`을 가짜로 바꿔 글리에게 말을 들려주는데, 이제 글리는 마이크를 직접 녹음하고 `apiSR.ts`가 `window.SpeechRecognition`을 `LocalSR`로 덮어써요. `api_sr.py`는 예전 Mic 연결(키가 없으면 브라우저 인식기)과 말하기 차례의 `transcribe` 로그를 전제로 해요(지금 말하기 차례는 `analyze`). 다시 쓰기 전에는 결과를 믿지 마세요.
+
+`tools/qa`의 스크립트 대부분은 카드 6장(레벨 2)을 기다려요. 새 브라우저는 레벨 1(4장)이라 init script로 `localStorage['wm.level.v1'] = '{"level":2,"poor":0}'`을 넣고 돌려요.
 
 ## 파일
 
