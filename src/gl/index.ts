@@ -411,7 +411,10 @@ function placeJump(s: Any) {
   if (c?.active) { const b = c.getBounds(); gx = b.right - b.width * 0.12; gy = b.top + b.height * 0.03; }
   else { gx = s.cx + s.zoneR * 0.8; gy = s.cy - s.zoneR * 0.9; }
   const r = game.canvas.getBoundingClientRect(), k = r.width / game.scale.width;
-  jb.place(r.left + gx * k, r.top + gy * k, 66 * Math.min(s.gw / 1280, s.gh / 720) * k, { x: gx, y: gy });
+  const d = 66 * Math.min(s.gw / 1280, s.gh / 720);
+  // phones (src/phone.ts, GameScene.phone): at least 52 px, a main button, and clear of the top bar
+  if (s.phone) gy = Math.max(gy, s.phone.hudBottom + 4 + Math.max(52, d) / 2);
+  jb.place(r.left + gx * k, r.top + gy * k, (s.phone ? Math.max(52, d) : d) * k, { x: gx, y: gy });
 }
 
 // The card collision, after the intro video (replaces GameScene.playImpact's flash, 2D rays, poof,
@@ -507,6 +510,9 @@ function redeal(scene: Any, soft: boolean) {
 function placeSkip(s: Any) {
   const game = state.game!, r = game.canvas.getBoundingClientRect(), k = r.width / game.scale.width;
   const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy);
+  // phones: on the bigger bottom buttons' row and as tall as they are, 10 px from the edge
+  const ph = s.phone;
+  if (ph) { state.howto!.placeSkip(r.left + (s.gw - 10) * k, r.top + ph.navCY * k, ph.navH * k); return; }
   state.howto!.placeSkip(r.left + (s.gw - 32 * su) * k, r.top + (648 * sy + 29 * su) * k, 58 * su * k);
 }
 
@@ -567,7 +573,11 @@ function showHint3D(scene: Any) {
 const GLEE_SPOT_KEY = 'wm3d-glee-spot-v1';
 function placeGlee(s: Any, dt: number) {
   const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy);
-  if (!state.gleeSpot) { state.glee!.place(445 * sx, 640 * sy, 125 * su, 0.36); return; }
+  if (!state.gleeSpot) {
+    // phones: the bottom buttons are taller there (GameScene.phone) - she stands on top of them, not behind
+    state.glee!.place(445 * sx, s.phone ? Math.min(640 * sy, s.phone.navTop - 2) : 640 * sy, 125 * su, 0.36);
+    return;
+  }
   const moving = gleeDrag?.mode === 'move';
   if (!moving) {
     // not on a card: after a drop, a resize, or a spot saved on another screen size, she steps to the nearest free place
@@ -626,9 +636,10 @@ function freeGleeSpot(s: Any, x: number, y: number) {
 function clampGleeSpot(s: Any, x: number, y: number) {
   const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy), h = 125 * su;
   const gx = Math.max(0.5 * h, Math.min(s.gw - 0.5 * h, x * sx));
-  const top = 13 * sy + 72 * su + 1.22 * h;
+  const ph = s.phone;   // phones: the bigger top bar and bottom buttons (GameScene.phone)
+  const top = ph ? ph.hudBottom + 1.22 * h : 13 * sy + 72 * su + 1.22 * h;
   const overNav = gx + 0.5 * h > 301 * sx && gx - 0.5 * h < 979 * sx;
-  const gy = Math.max(top, Math.min(overNav ? 648 * sy : s.gh - 0.08 * h, y * sy));
+  const gy = Math.max(top, Math.min(overNav ? (ph ? ph.navTop - 2 : 648 * sy) : s.gh - 0.08 * h, y * sy));
   return { x: gx / sx, y: gy / sy };
 }
 function loadGleeSpot() {

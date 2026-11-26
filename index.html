@@ -11,6 +11,11 @@
 </head>
 <body>
   <div id="game-container"></div>
+  <!-- phones held upright only (style.css): turn it sideways — the same hint in every phonics game -->
+  <div class="rotate-hint" role="status">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><g class="rh-dev"><rect x="21" y="14" width="22" height="36" rx="4" /><path d="M29 44.5h6" /></g><g class="rh-arrow"><path d="M58.6 27.3A27 27 0 0 0 36.7 5.4" /><path d="M41.7 3.1 36.7 5.4 40.6 9.3" /></g></svg>
+    <p>Turn your phone sideways</p>
+  </div>
   <script type="module" src="./src/main.ts"></script>
 </body>
 </html>

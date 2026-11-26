@@ -84,9 +84,11 @@ export class Reward {
     const cx = b.centerX, bottom = b.bottom;
 
     // ── the chips: a row of dark pills under the card ──
-    const cw = Math.round(110 * s), ch = Math.round(40 * s), gap = Math.round(10 * s);
+    // phones (src/phone.ts, GameScene.phone): the chips and their "+10" a little bigger (13 px), above the taller buttons
+    const ph = sc.phone, cs = ph ? Math.max(s, 0.6) : s;
+    const cw = Math.round(110 * cs), ch = Math.round(40 * cs), gap = Math.round(10 * cs);
     let rowX = cx;
-    const chipY = Math.min(bottom + 44 * s, H - 96 * s);
+    const chipY = ph ? Math.min(bottom + 44 * cs, ph.navTop - 6 - ch / 2) : Math.min(bottom + 44 * s, H - 96 * s);
     const rowL = () => rowX - (gains.length * cw + (gains.length - 1) * gap) / 2;
     if (avoid && chipY + ch / 2 > avoid.t && chipY - ch / 2 < avoid.b && rowL() < avoid.r + 6 * s) rowX += avoid.r + 6 * s - rowL();
     const chips = gains.map((g, i) => {
@@ -94,13 +96,13 @@ export class Reward {
       const c = this.keep(sc.add.container(x, chipY).setDepth(68).setScale(0));
       const bg = sc.add.graphics();
       bg.fillStyle(0x1B1747, 0.82); bg.fillRoundedRect(-cw / 2, -ch / 2, cw, ch, ch / 2);
-      bg.lineStyle(Math.max(1.5, 2 * s), 0xFFFFFF, 0.2); bg.strokeRoundedRect(-cw / 2, -ch / 2, cw, ch, ch / 2);
-      bg.fillStyle(0xFFFFFF, 0.08); bg.fillRoundedRect(-cw / 2 + 4 * s, -ch / 2 + 3 * s, cw - 8 * s, ch * 0.42, ch * 0.21);
-      const isz = 44 * s;
+      bg.lineStyle(Math.max(1.5, 2 * cs), 0xFFFFFF, 0.2); bg.strokeRoundedRect(-cw / 2, -ch / 2, cw, ch, ch / 2);
+      bg.fillStyle(0xFFFFFF, 0.08); bg.fillRoundedRect(-cw / 2 + 4 * cs, -ch / 2 + 3 * cs, cw - 8 * cs, ch * 0.42, ch * 0.21);
+      const isz = 44 * cs;
       const icon = sc.add.image(-cw / 2 + isz * 0.42, 0, ICON[g.kind]);
       icon.setScale(isz / Math.max(icon.width, icon.height));
       const txt = sc.add.text(-cw / 2 + isz * 0.95, 0, '+0', {
-        fontFamily: '"Baloo 2", "Inter", sans-serif', fontSize: `${Math.round(22 * s)}px`, color: '#FFFFFF', fontStyle: 'bold',
+        fontFamily: '"Baloo 2", "Inter", sans-serif', fontSize: `${Math.round(22 * cs)}px`, color: '#FFFFFF', fontStyle: 'bold',
         shadow: { offsetX: 0, offsetY: 2, color: '#000000', blur: 4, fill: true },
       }).setOrigin(0, 0.5);
       c.add([bg, icon, txt]);
