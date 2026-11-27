@@ -8,6 +8,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@700;800&family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./style.css" />
+<!-- the "turn your phone sideways" hint is for phones only: an iPad's narrow Split View / Slide Over pane looks like an
+     upright phone to the CSS query, so a screen whose short side is over 500 px (every tablet) never shows it -->
+<style>.not-phone .rotate-hint { display: none !important; }</style>
+<script>try { if (Math.min(screen.width, screen.height) > 500) document.documentElement.classList.add('not-phone'); } catch (e) { /* no screen info */ }</script>
 </head>
 <body>
   <div id="game-container"></div>

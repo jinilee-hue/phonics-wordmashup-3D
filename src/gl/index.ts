@@ -413,7 +413,7 @@ function placeJump(s: Any) {
   const r = game.canvas.getBoundingClientRect(), k = r.width / game.scale.width;
   const d = 66 * Math.min(s.gw / 1280, s.gh / 720);
   // phones (src/phone.ts, GameScene.phone): at least 52 px, a main button, and clear of the top bar
-  if (s.phone) gy = Math.max(gy, s.phone.hudBottom + 4 + Math.max(52, d) / 2);
+  if (s.phone) gy = Math.max(gy, s.phone.hudBottom + 8 + Math.max(52, d) / 2);
   jb.place(r.left + gx * k, r.top + gy * k, (s.phone ? Math.max(52, d) : d) * k, { x: gx, y: gy });
 }
 
@@ -510,9 +510,9 @@ function redeal(scene: Any, soft: boolean) {
 function placeSkip(s: Any) {
   const game = state.game!, r = game.canvas.getBoundingClientRect(), k = r.width / game.scale.width;
   const sx = s.gw / 1280, sy = s.gh / 720, su = Math.min(sx, sy);
-  // phones: on the bigger bottom buttons' row and as tall as they are, 10 px from the edge
+  // phones: on the bottom buttons' row, 42 px tall (a system button), 12 px from the edge
   const ph = s.phone;
-  if (ph) { state.howto!.placeSkip(r.left + (s.gw - 10) * k, r.top + ph.navCY * k, ph.navH * k); return; }
+  if (ph) { state.howto!.placeSkip(r.left + (s.gw - 12) * k, r.top + ph.navCY * k, 42 * k); return; }
   state.howto!.placeSkip(r.left + (s.gw - 32 * su) * k, r.top + (648 * sy + 29 * su) * k, 58 * su * k);
 }
 
@@ -638,7 +638,7 @@ function clampGleeSpot(s: Any, x: number, y: number) {
   const gx = Math.max(0.5 * h, Math.min(s.gw - 0.5 * h, x * sx));
   const ph = s.phone;   // phones: the bigger top bar and bottom buttons (GameScene.phone)
   const top = ph ? ph.hudBottom + 1.22 * h : 13 * sy + 72 * su + 1.22 * h;
-  const overNav = gx + 0.5 * h > 301 * sx && gx - 0.5 * h < 979 * sx;
+  const overNav = ph ? gx + 0.5 * h > ph.navL && gx - 0.5 * h < ph.navR : gx + 0.5 * h > 301 * sx && gx - 0.5 * h < 979 * sx;
   const gy = Math.max(top, Math.min(overNav ? (ph ? ph.navTop - 2 : 648 * sy) : s.gh - 0.08 * h, y * sy));
   return { x: gx / sx, y: gy / sy };
 }

@@ -1,8 +1,11 @@
 import Phaser from 'phaser';
 import { cardScheme } from '../data/compounds';
+import { isPhone } from '../phone';
 
 export const CARD_W = 200;
 export const CARD_H = 268;
+/** how far a card floats up and back (px); phones (src/phone.ts): half, so the top cards stay clear of the top bar */
+export const floatAmp = () => (isPhone() ? 7 : 14);
 const R = 22;
 // Comfortable tap margin around the visible card so it's easy to grab.
 // Hovering a card raises its depth (see setupDrag) so this padding never lets a
@@ -182,7 +185,7 @@ export class WordCard extends Phaser.GameObjects.Container {
   private startFloat() {
     this.floatTween = this.scene.tweens.add({
       targets: this,
-      y: this.baseY - 14,
+      y: this.baseY - floatAmp(),   // (same timing everywhere)
       duration: 1600 + Math.random() * 700,
       ease: 'Sine.easeInOut',
       yoyo: true,

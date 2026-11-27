@@ -5,6 +5,7 @@ import { BootScene } from './scenes/BootScene';
 import { GameScene } from './scenes/GameScene';
 import { gameAudio } from './audio';
 import { start3D } from './gl';
+import { isPhone } from './phone';
 
 runIntro(() => {
   const game = new Phaser.Game({
@@ -107,6 +108,9 @@ function runIntro(onComplete: () => void) {
     skipBtn.style.color = '#ffffff';
     skipBtn.style.fontSize = 'clamp(18px,2.2vw,28px)';
     skipBtn.style.padding = 'clamp(12px,1.8vh,20px) clamp(32px,4vw,60px)';
+    // phones held sideways (src/phone.ts; round 2, 2026-11-26: bigger play buttons for 5-year-olds): START 66 px tall,
+    // about 190 px wide (it came out 134 x 51 there)
+    if (isPhone()) { skipBtn.style.fontSize = '24px'; skipBtn.style.padding = '0 46px'; skipBtn.style.height = '66px'; }
     skipBtn.style.letterSpacing = '4px';
     skipBtn.style.animation = 'skipPulse 1.2s ease-in-out infinite';
   });

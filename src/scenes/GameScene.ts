@@ -1,10 +1,19 @@
 import Phaser from 'phaser';
-import { WordCard, CARD_W, CARD_H } from '../objects/WordCard';
+import { WordCard, CARD_W, CARD_H, floatAmp } from '../objects/WordCard';
 import { pickRoundPairs, COMPOUND_PAIRS, type CompoundPair } from '../data/compounds';
 import { gameAudio } from '../audio';
-import { isPhone, PHONE_TAP } from '../phone';
+import { isPhone, PHONE_LANDSCAPE, PHONE_TAP } from '../phone';
 
 const ROUNDS = 6;
+/** phones (src/phone.ts): the controls keep PHONE_EDGE px from the screen's top, left and right edges and
+ *  PHONE_EDGE_BOTTOM from the bottom (user 2026-11-26: "너무 좌우 상하 여백없이 붙어있는건 아닌지"); the bottom row's
+ *  buttons are PHONE_NAV.w wide, PHONE_NAV.gap apart and up to PHONE_NAV.h tall (round 2: bigger play controls for
+ *  5-year-olds, in their places - as tall as the room under this level's cards allows) */
+const PHONE_EDGE = 12, PHONE_EDGE_BOTTOM = 14, PHONE_NAV = { w: 104, gap: 8, h: 64 };
+/** phones: the top bar's body at most PHONE_BAR px tall (a little under its 40-42 px, so the top cards and their float
+ *  - halved on phones, WordCard - clash with it less; its labels stay 12 px); the result book's bottom row (Next Play,
+ *  Replay, Home) at most PHONE_FINALE_NAV px tall, so the book's '?' cards keep room */
+const PHONE_BAR = 36, PHONE_FINALE_NAV = 52;
 const HINT_COST = 5;   // coins for the Hint button (Glee's own idle help stays free)
 const CARD_GEMS = 5;   // gems to open a '?' card in the Compound Book (user 2026-11-22: what a game collects needs a use)
 /** Game levels (phonics-kit README "공통 규칙: 레벨", user 2026-11-22). Never picked: START goes on at the saved level
@@ -45,9 +54,11 @@ export class GameScene extends Phaser.Scene {
   private snapOff = 0;
   /** a phone held sideways (src/phone.ts): the bigger top bar and bottom buttons' sizes, for the popups, Glee, SKIP and
    *  JUMP (gl/index.ts) and the reward chips (gl/reward.ts); null on tablets and PCs, which keep the design as it was */
-  private phone: { hudK: number; hudBottom: number; navK: number; navTop: number; navH: number; navCY: number } | null = null;
+  private phone: { hudK: number; hudBottom: number; lvL: number; lvR: number; lvB: number; navK: number; navTop: number; navH: number; navCY: number; navL: number; navR: number; micCX: number } | null = null;
   /** the Mic and Hint buttons' pieces: on a phone the result book's Next Play takes their place in the bottom row */
   private navMid: Phaser.GameObjects.GameObject[] = [];
+  /** phones: lays the bottom row's Replay and Home out at a lower height (the result book's PHONE_FINALE_NAV row) */
+  private phoneNavTo: ((h: number) => void) | null = null;
 
   private leftCards: WordCard[] = [];
   private rightCards: WordCard[] = [];
@@ -216,7 +227,16 @@ export class GameScene extends Phaser.Scene {
     this.input.on('gameobjectover', () => { this.overButton = true;  this.game.canvas.style.cursor = 'pointer'; });
     this.input.on('gameobjectout',  () => { this.overButton = false; this.game.canvas.style.cursor = 'default'; });
 
-    this.phone = isPhone() ? { hudK: 0, hudBottom: 0, navK: 0, navTop: 0, navH: 0, navCY: 0 } : null;
+    // the phone layout is built once here: if the phone check stops (or starts) matching later - a phone turned upright, a
+    // foldable opened - the game starts over in the layout that fits. Tablets and PCs never match, so it never fires there.
+    const mq = window.matchMedia?.(PHONE_LANDSCAPE);
+    if (mq) {
+      const builtPhone = mq.matches;
+      const flip = () => { if (mq.matches !== builtPhone) this.scene.restart(); };
+      mq.addEventListener('change', flip);
+      this.events.once('shutdown', () => mq.removeEventListener('change', flip));
+    }
+    this.phone = isPhone() ? { hudK: 0, hudBottom: 0, lvL: 0, lvR: 0, lvB: 0, navK: 0, navTop: 0, navH: 0, navCY: 0, navL: 0, navR: 0, micCX: 0 } : null;
     this.buildStageBackground();
     this.buildParticleBurst();
     this.makeHeartIcons();
@@ -382,17 +402,18 @@ export class GameScene extends Phaser.Scene {
     const p  = (fx: number) => Math.round(fx * sx);   // x pixel
     const q  = (fy: number) => Math.round(fy * sy);   // y pixel
     const HUD_K = 1.2;                                  // 상단 HUD 확대 배율
-    // phones: the row as big as the width lets it be, 42 px tall at most (the row is 1033 design units: back 62 + 12 +
-    // book 241 | 4 badges 152 + 4 gaps 12 + settings 62), with its side margins and 8 px between the two groups
+    // phones: the row as big as the width lets it be, PHONE_BAR px tall at most (the row is 1033 design units: back 62 +
+    // 12 + book 241 | 4 badges 152 + 4 gaps 12 + settings 62), with its side margins and 8 px between the two groups
     const PH = this.phone;
-    const PK = PH ? Math.min((GW - 2 * p(14) - 8) / 1033, Math.max(s * HUD_K, 42 / 58)) : 0;
+    const PK = PH ? Math.min((GW - 2 * PHONE_EDGE - 8) / 1033, Math.max(s * HUD_K, 42 / 58), PHONE_BAR / 58) : 0;
+    const ml = PH ? PHONE_EDGE : p(14);               // the left margin (phones: PHONE_EDGE)
     const sz = PH ? (f: number) => Math.round(f * PK) : (f: number)  => Math.round(f  * s * HUD_K); // uniform size (HUD 확대)
 
     // ── 상단 HUD 공통 규격 ──────────────────────────────────────────
     // 모든 에셋의 "몸통" 높이는 58단위. 단, 버튼(btn_back/btn_setting)만
     // viewBox 68(하단에 그림자 여백 10)이라 같은 크기로 그리면 몸통이 작게 렌더됨.
     // → 모든 요소의 "보이는 몸통 높이"를 bodyH(sz58)로 통일(무왜곡).
-    const topY = this.phone ? 4 : q(13);         // 모든 몸통 top (Figma:13) — phones: 4 px from the top edge
+    const topY = this.phone ? PHONE_EDGE : q(13);   // 모든 몸통 top (Figma:13) — phones: PHONE_EDGE px from the top edge
     const bodyH = sz(58);                        // 공통 몸통 높이
     const midY = topY + Math.round(bodyH / 2);   // 몸통 세로 중심
     const bSz = sz(62);                          // 버튼 몸통 폭(레이아웃/히트존용)
@@ -417,13 +438,13 @@ export class GameScene extends Phaser.Scene {
     };
 
     // ── Back button (Figma: left:14, top:13, size:62) — 공통 그림자 함수 사용 ──
-    drawTopShadow(p(14), bSz, sz(16));
-    const backImg = this.add.image(p(14) + bSz / 2, midY + btnCyOff, 'btn_back_main').setDisplaySize(btnDisp, btnDisp).setDepth(51);
+    drawTopShadow(ml, bSz, sz(16));
+    const backImg = this.add.image(ml + bSz / 2, midY + btnCyOff, 'btn_back_main').setDisplaySize(btnDisp, btnDisp).setDepth(51);
 
     // Back button hit zone (invisible)
     const hitG = this.add.graphics().setDepth(55).setAlpha(0.001);
-    hitG.fillRect(p(14), topY, bSz, bodyH);
-    hitG.setInteractive({ hitArea: new Phaser.Geom.Rectangle(p(14), topY, bSz, bodyH), hitAreaCallback: Phaser.Geom.Rectangle.Contains, useHandCursor: true });
+    hitG.fillRect(ml, topY, bSz, bodyH);
+    hitG.setInteractive({ hitArea: new Phaser.Geom.Rectangle(ml, topY, bSz, bodyH), hitAreaCallback: Phaser.Geom.Rectangle.Contains, useHandCursor: true });
     hitG.on('pointerdown', () => {
       this.tweens.add({ targets: backImg, scaleX: 0.88, scaleY: 0.88, duration: 80, yoyo: true, ease: 'Back.easeIn' });
       this.cameras.main.fadeOut(280, 0, 0, 0);
@@ -433,7 +454,7 @@ export class GameScene extends Phaser.Scene {
     // ── Compound Book pill (Figma: x88 top13 w241) — 몸통 높이 bodyH, 버튼과 동일 ──
     const pillW = sz(241), pillH = bodyH;
     const pillTop = topY, pillCY = midY;
-    const pillX = p(14) + bSz + sz(12);   // 뒤로가기 버튼과 간격 sz(12)
+    const pillX = ml + bSz + (PH ? Math.max(8, sz(12)) : sz(12));   // 뒤로가기 버튼과 간격 sz(12) (phones: 8 px at least)
 
     drawTopShadow(pillX, pillW, sz(16));
     // #3F2586 보라색 밑단(3D 그림자 박스) — 메인보다 sz(4) 아래로
@@ -445,7 +466,7 @@ export class GameScene extends Phaser.Scene {
 
     // "Compound Book" label — 상단
     this.add.text(pillX + sz(76), pillTop + sz(9), 'Compound Book', {
-      fontFamily: '"Inter", "Baloo 2"', fontSize: `${sz(PH ? 17 : 15)}px`,
+      fontFamily: '"Inter", "Baloo 2"', fontSize: `${PH ? Math.max(12, sz(18)) : sz(15)}px`,
       color: '#FFFFFF', fontStyle: 'bold',
     }).setDepth(52);
 
@@ -461,7 +482,7 @@ export class GameScene extends Phaser.Scene {
 
     // Round progress text (centered on track)
     this.roundText = this.add.text(tX + tW / 2, tY + tH / 2, `1 / ${ROUNDS}`, {
-      fontFamily: 'Baloo 2', fontSize: `${sz(PH ? 17 : 10)}px`, color: 'rgba(255,255,255,0.7)',
+      fontFamily: 'Baloo 2', fontSize: `${PH ? Math.max(12, sz(18)) : sz(10)}px`, color: 'rgba(255,255,255,0.7)',
     }).setOrigin(0.5).setDepth(54);
 
     // 알약(Compound Book) 전체 클릭 → 도감 팝업. hover 시 손가락 커서.
@@ -480,13 +501,13 @@ export class GameScene extends Phaser.Scene {
     this.add.image(lvX + lvW / 2, lvY + lvH / 2 + sz(3), 'hud_bar_main').setDisplaySize(lvW, lvH).setDepth(50);
     this.add.image(lvX + lvW / 2, lvY + lvH / 2, 'hud_bar_pill').setDisplaySize(lvW, lvH).setDepth(51);
     this.add.text(lvX + lvW / 2, lvY + lvH / 2, `LEVEL ${this.level}`, {
-      fontFamily: '"Inter", "Baloo 2"', fontSize: `${sz(PH ? 17 : 14)}px`, color: '#FFFFFF', fontStyle: 'bold',
+      fontFamily: '"Inter", "Baloo 2"', fontSize: `${PH ? Math.max(12, sz(18)) : sz(14)}px`, color: '#FFFFFF', fontStyle: 'bold',
     }).setOrigin(0.5).setDepth(52);
 
     // ── 오른쪽 그룹: 배지 3 + 설정. 오른쪽 끝 기준(오른쪽 여백 = 왼쪽 back), 간격 sz(12) ──
     const bW = sz(152), bH = bodyH;
-    const gap = sz(12);
-    const margin = Math.round(14 * sx);          // 좌측 back 버튼 여백과 대칭
+    const gap = PH ? Math.max(8, sz(12)) : sz(12);
+    const margin = PH ? PHONE_EDGE : Math.round(14 * sx);   // 좌측 back 버튼 여백과 대칭
     const sLeft = GW - margin - bSz;             // 설정 버튼 좌측(몸통 폭 bSz)
     const b3L = sLeft - gap - bW;
     const b2L = b3L - gap - bW;
@@ -557,7 +578,7 @@ export class GameScene extends Phaser.Scene {
         cx: bx + bW / 2, bottom: midY + bH / 2 + sz(4), ix: icon.x, iy: midY, isz: iconSz, k: PH ? PK : s * HUD_K, icon: cfg.iconKey,
       };
     });
-    if (PH) { PH.hudK = PK; PH.hudBottom = topY + bodyH + sz(4); }
+    if (PH) { PH.hudK = PK; PH.hudBottom = topY + bodyH + sz(4); Object.assign(PH, { lvL: lvX, lvR: lvX + lvW, lvB: lvY + lvH + sz(3) }); }
   }
 
   private drawProgress() {
@@ -604,7 +625,7 @@ export class GameScene extends Phaser.Scene {
     const { gw: GW, gh: GH } = this;
     // phones: the panel as big as the screen allows, on a shorter layout (340 units, rows 60 apart) - 42 px controls
     const PH = this.phone;
-    const s = PH ? Math.min((GH - 16) / 340, (GW - 16) / 480, 1) : Math.min(GW / 1280, GH / 720);
+    const s = PH ? Math.min((GH - PHONE_EDGE - PHONE_EDGE_BOTTOM) / 340, (GW - 2 * PHONE_EDGE) / 480, 1) : Math.min(GW / 1280, GH / 720);
     const sz = (f: number) => Math.round(f * s);
     const py = (desk: number, phone: number) => (PH ? phone : desk);   // a design y: the phone layout's where it differs
 
@@ -963,23 +984,41 @@ export class GameScene extends Phaser.Scene {
 
     const p  = (fx: number) => Math.round(fx * sx);
     const q  = (fy: number) => Math.round(fy * sy);
-    // phones: 42 px buttons (17 px labels) on the bottom edge
+    // phones (round 2, 2026-11-26: bigger play controls for 5-year-olds, in their places): the four buttons PHONE_NAV.w
+    // wide in a centred row PHONE_EDGE_BOTTOM px over the bottom edge, 20 px labels, as tall as the room under this
+    // level's cards (as designed - their places and size untouched) over that row allows: 64 px at most, 42 at least
     const PH = this.phone;
-    const NK = PH ? Math.max(s, 42 / 58) : 0;
+    const BW = PHONE_NAV.w, BG = PHONE_NAV.gap, rowL = Math.round(GW / 2 - (4 * BW + 3 * BG) / 2), rowR = rowL + 4 * BW + 3 * BG;
+    let NH = 42;
+    if (PH) {
+      const lay = LAYOUTS[this.lv.cards / 2], ck = 0.972 * 0.8 * s * lay.k;   // startRound's card slots and size
+      let low = 0;
+      for (const [x, y, a] of lay.slots) for (const fx of [x, 1280 - x]) {
+        const r = (a * Math.PI) / 180, c = Math.abs(Math.cos(r)), n = Math.abs(Math.sin(r));
+        const hw = (100 * c + 134 * n) * ck, hh = (100 * n + 134 * c) * ck, cx = Math.round(fx * sx);
+        if (cx + hw > rowL - 4 && cx - hw < rowR + 4) low = Math.max(low, Math.round((y + 30) * sy) + hh);
+      }
+      NH = Math.max(42, Math.min(PHONE_NAV.h, Math.floor(GH - PHONE_EDGE_BOTTOM - 5 - (low + 8))));
+    }
+    const NK = PH ? NH / 58 : 0;
     const sz = PH ? (f: number) => Math.round(f * NK) : (f: number)  => Math.round(f  * s);
+    const iz = PH ? (f: number) => Math.round(f * 0.9) : sz;          // icons (phones: a little under the label's scale)
+    /** a Figma x on the button row (301 / 473 / 645 / 817 = the buttons' left edges, + 81 = their centres); phones: the centred row */
+    const nx = PH ? (fx: number) => { const i = Math.floor((fx - 301) / 172); return rowL + i * (BW + BG) + Math.round(((fx - 301 - i * 172) / 162) * BW); } : p;
+    const nw = PH ? () => BW : p;                                        // a button's width (Figma 162)
 
     const navH = sz(58), shadowOff = sz(4);
-    const navY = PH ? GH - navH - shadowOff - 4 : q(648); // 높이는 균일 배율(sz)로 → 상단 HUD와 높이 일치
+    const navY = PH ? GH - navH - shadowOff - PHONE_EDGE_BOTTOM : q(648); // 높이는 균일 배율(sz)로 → 상단 HUD와 높이 일치
     const navCY = navY + Math.round(navH / 2);
-    if (PH) Object.assign(PH, { navK: NK, navTop: navY, navH, navCY });
+    if (PH) Object.assign(PH, { navK: NK, navTop: navY, navH, navCY, navL: rowL, navR: rowR, micCX: nx(473 + 81) });
     const txtStyle = {
-      fontFamily: '"Inter", "Baloo 2"', fontSize: `${sz(24)}px`,
+      fontFamily: '"Inter", "Baloo 2"', fontSize: `${PH ? 20 : sz(24)}px`,
       color: '#FFFFFF', fontStyle: 'bold',
       shadow: { offsetX: 0, offsetY: sz(2), color: 'rgba(0,0,0,0.25)', blur: 2, fill: true },
     };
 
     const drawLayered = (figX: number, figW: number, shKey: string, mainKey: string, topKey: string) => {
-      const x = p(figX), w = p(figW);
+      const x = nx(figX), w = nw(figW);
       return [
         this.add.image(x + w / 2, navCY + shadowOff, shKey  ).setDisplaySize(w, navH).setDepth(40),
         this.add.image(x + w / 2, navCY,             mainKey).setDisplaySize(w, navH).setDepth(41),
@@ -988,13 +1027,15 @@ export class GameScene extends Phaser.Scene {
     };
 
     const makeHit = (figX: number, figW: number, cb: () => void) => {
-      const x = p(figX), w = p(figW);
+      const x = nx(figX), w = nw(figW);
       const h = this.add.graphics().setDepth(45).setAlpha(0.001);
       h.fillRect(x, navY, w, navH);
       h.setInteractive({ hitArea: new Phaser.Geom.Rectangle(x, navY, w, navH), hitAreaCallback: Phaser.Geom.Rectangle.Contains, useHandCursor: true });
       h.on('pointerdown', cb);
       return h;
     };
+    // phones: Replay's and Home's pieces (layers, icon, label, tap area) for phoneNavTo
+    const ends: { layers: Phaser.GameObjects.Image[]; mid: Phaser.GameObjects.Components.Transform[]; hit: Phaser.GameObjects.Graphics; x: number; w: number }[] = [];
 
     const btnPress = (imgs: Phaser.GameObjects.Image[]) => {
       this.tweens.add({ targets: imgs, scaleX: 0.92, scaleY: 0.92, duration: 80, yoyo: true, ease: 'Back.easeIn' });
@@ -1011,10 +1052,10 @@ export class GameScene extends Phaser.Scene {
     };
 
     // ── Replay  (Figma left:301) ──────────────────────────────────
-    drawLayered(301, 162, 'nav_home_shadow', 'nav_home_main', 'nav_home_top');
-    const replayIcon = this.add.image(0, navCY, 'icon_replay').setDisplaySize(sz(30), sz(30)).setDepth(43);
-    centerInBtn(p(301 + 81), replayIcon, sz(30), 'Replay');
-    makeHit(301, 162, () => {
+    const replayLayers = drawLayered(301, 162, 'nav_home_shadow', 'nav_home_main', 'nav_home_top');
+    const replayIcon = this.add.image(0, navCY, 'icon_replay').setDisplaySize(iz(30), iz(30)).setDepth(43);
+    const replayLabel = centerInBtn(nx(301 + 81), replayIcon, iz(30), 'Replay');
+    const replayHit = makeHit(301, 162, () => {
       btnPress([replayIcon]);
       this.time.delayedCall(100, () => {
         this.cameras.main.fadeOut(280, 0, 0, 0);
@@ -1023,13 +1064,13 @@ export class GameScene extends Phaser.Scene {
     });
 
     // ── Mic  (Figma left:473) ─────────────────────────────────────
-    const micX = p(473), micW = p(162);
+    const micX = nx(473), micW = nw(162);
     const micShadow = this.add.image(micX + micW / 2, navCY + shadowOff, 'nav_green_shadow').setDisplaySize(micW, navH).setDepth(40);
     const micMain = this.add.image(micX + micW / 2, navCY, 'nav_green_main').setDisplaySize(micW, navH).setDepth(41);
     const micTop  = this.add.image(micX + micW / 2, navCY, 'nav_green_top' ).setDisplaySize(micW, navH).setDepth(42);
     this.micBtnLayers = [micMain, micTop];
-    this.micBtnIcon = this.add.image(0, navCY, 'icon_mic').setDisplaySize(sz(24), sz(34)).setDepth(43);
-    this.micLabel = centerInBtn(p(473 + 81), this.micBtnIcon, sz(24), 'Mic');
+    this.micBtnIcon = this.add.image(0, navCY, 'icon_mic').setDisplaySize(iz(24), iz(34)).setDepth(43);
+    this.micLabel = centerInBtn(nx(473 + 81), this.micBtnIcon, iz(24), 'Mic');
     const micHit = makeHit(473, 162, () => {
       btnPress([this.micBtnIcon]);
       this.startMic();
@@ -1038,9 +1079,9 @@ export class GameScene extends Phaser.Scene {
     // ── Hint  (Figma left:645) ────────────────────────────────────
     const hintImgs: Phaser.GameObjects.Image[] = [];
     const hintLayers = drawLayered(645, 162, 'nav_hint_shadow', 'nav_hint_main', 'nav_hint_top');
-    const hintIcon = this.add.image(0, navCY, 'icon_hint').setDisplaySize(sz(28), sz(34)).setDepth(43);
+    const hintIcon = this.add.image(0, navCY, 'icon_hint').setDisplaySize(iz(28), iz(34)).setDepth(43);
     hintImgs.push(hintIcon);
-    const hintLabel = centerInBtn(p(645 + 81), hintIcon, sz(28), 'Hint');
+    const hintLabel = centerInBtn(nx(645 + 81), hintIcon, iz(28), 'Hint');
     // grey while coins are short (refreshHint); WebGL only - the Canvas renderer fades it instead
     this.hintParts = [...hintLayers, hintIcon, hintLabel];
     for (const o of this.hintParts) {
@@ -1066,17 +1107,35 @@ export class GameScene extends Phaser.Scene {
 
     // ── Home  (Figma left:817) ────────────────────────────────────
     const homeImgs: Phaser.GameObjects.Image[] = [];
-    drawLayered(817, 162, 'nav_home_shadow', 'nav_home_main', 'nav_home_top');
-    const homeIcon = this.add.image(0, navCY, 'icon_home').setDisplaySize(sz(30), sz(28)).setDepth(43);
+    const homeLayers = drawLayered(817, 162, 'nav_home_shadow', 'nav_home_main', 'nav_home_top');
+    const homeIcon = this.add.image(0, navCY, 'icon_home').setDisplaySize(iz(30), iz(28)).setDepth(43);
     homeImgs.push(homeIcon);
-    centerInBtn(p(817 + 81), homeIcon, sz(30), 'Home');
-    makeHit(817, 162, () => {
+    const homeLabel = centerInBtn(nx(817 + 81), homeIcon, iz(30), 'Home');
+    const homeHit = makeHit(817, 162, () => {
       btnPress(homeImgs);
       this.time.delayedCall(100, () => {
         this.cameras.main.fadeOut(400, 0, 0, 0);
         this.cameras.main.once('camerafadeoutcomplete', () => window.location.reload());
       });
     });
+
+    // phones: the result book's row is lower (PHONE_FINALE_NAV): Replay and Home go down to height h on the same bottom
+    // margin - same width, icon and 20 px label (they never scale with the row on a phone); the Mic and Hint are hidden then
+    this.phoneNavTo = null;
+    if (!PH) return;
+    ends.push({ layers: replayLayers, mid: [replayIcon, replayLabel], hit: replayHit, x: nx(301), w: nw(162) },
+      { layers: homeLayers, mid: [homeIcon, homeLabel], hit: homeHit, x: nx(817), w: nw(162) });
+    this.phoneNavTo = (h: number) => {
+      if (h >= navH) return;
+      const sh = Math.round((h / 58) * 4), y = GH - h - sh - PHONE_EDGE_BOTTOM, cy = y + Math.round(h / 2);
+      for (const e of ends) {
+        e.layers.forEach((im, i) => im.setY(i === 0 ? cy + sh : cy).setDisplaySize(e.w, h));
+        e.mid.forEach(o => { o.y = cy; });
+        e.hit.clear().fillStyle(0x000000, 0).fillRect(e.x, y, e.w, h);   // (clear() drops the new graphics' clear fill)
+        (e.hit.input!.hitArea as Phaser.Geom.Rectangle).setTo(e.x, y, e.w, h);
+      }
+      Object.assign(PH, { navK: h / 58, navTop: y, navH: h, navCY: cy });
+    };
   }
 
   private startMic() {
@@ -1133,9 +1192,9 @@ export class GameScene extends Phaser.Scene {
     });
 
     // Expanding ring radiating from button center
-    const ringX = Math.round((473 + 81) * GW / 1280);
+    const ringX = PH ? PH.micCX : Math.round((473 + 81) * GW / 1280);
     const ringY = PH ? PH.navCY : Math.round(GH * 677 / 720);
-    const ringW = PH ? Math.round(162 * GW / 1280) : sz(162);
+    const ringW = PH ? PHONE_NAV.w : sz(162);   // phones: the Mic button's width (buildBottomNav)
     const ring  = this.add.graphics().setDepth(39);
     this.micRing = ring;
     this.micRingTween = this.tweens.add({
@@ -1368,7 +1427,9 @@ export class GameScene extends Phaser.Scene {
 
     const makeCard = (figX: number, figY: number, angle: number, slotIdx: number, word: string, icon: string, side: 'left' | 'right') => {
       const targetX  = pf(figX);
-      const targetY  = qf(figY + 30);   // 전체 아래로 30(그래비티존과 동일 이동)
+      let targetY    = qf(figY + 30);   // 전체 아래로 30(그래비티존과 동일 이동)
+      let k = CARD_SCALE;
+      if (this.phone) ({ y: targetY, k } = this.phoneCardFit(targetX, targetY, angle, CARD_SCALE));   // phones: clear of the bars
       const startX   = side === 'left' ? -CARD_W : GW + CARD_W;
       const leftKey  = `card_left_${word}`;
       const rightKey = `card_right_${word}`;
@@ -1376,8 +1437,8 @@ export class GameScene extends Phaser.Scene {
         ? (this.textures.exists(leftKey)  ? leftKey  : undefined)
         : (this.textures.exists(rightKey) ? rightKey : undefined);
       const card = new WordCard(this, startX, targetY, word, icon, true, bgKey);
-      card.baseScale = CARD_SCALE;   // 상호작용 트윈의 기준 배율(클릭 시 커지는 버그 방지)
-      card.setScale(CARD_SCALE);
+      card.baseScale = k;   // 상호작용 트윈의 기준 배율(클릭 시 커지는 버그 방지) (CARD_SCALE; phones: phoneCardFit)
+      card.setScale(k);
       card.setAngle(angle);
       card.baseX = targetX;
       this.tweens.add({ targets: card, x: targetX, duration: 480 + slotIdx * 40, ease: 'Back.easeOut', delay: slotIdx * 80 });
@@ -1390,6 +1451,41 @@ export class GameScene extends Phaser.Scene {
     rightData.forEach((d, i) => this.rightCards.push(
       makeCard(rightPos[i].x, rightPos[i].y, rightAngle[i], i, d.word, d.icon, 'right')
     ));
+  }
+
+  /** phones: a card's rest place and size in its slot, so that at the top of its float it stays 8 px under the top bar
+   *  and its LEVEL chip and at the bottom of its float (its rest) 8 px over the bottom buttons (coordinator 2026-11-26).
+   *  A card that would cross one moves the least it needs to, straight up or down; one that can't fit between them shrinks
+   *  (85 % of its size at the least - then it sits halfway). Cards clear of both keep their slot as designed. */
+  private phoneCardFit(x: number, y0: number, angle: number, k0: number) {
+    const PH = this.phone!, amp = floatAmp(), a = (angle * Math.PI) / 180, cs = Math.cos(a), sn = Math.sin(a);
+    /** the card outline's highest (or lowest) point over the x range L..R, against its centre; null: not over it */
+    const edge = (k: number, L: number, R: number, low: boolean) => {
+      let poly = [[-CARD_W / 2, -CARD_H / 2], [CARD_W / 2, -CARD_H / 2], [CARD_W / 2, CARD_H / 2], [-CARD_W / 2, CARD_H / 2]]
+        .map(([u, v]) => [x + (u * cs - v * sn) * k, (u * sn + v * cs) * k]);
+      for (const [side, lim] of [[1, L], [-1, R]]) {
+        const out: number[][] = [];
+        poly.forEach((p, i) => {
+          const q = poly[(i + 1) % poly.length], ip = side * (p[0] - lim) >= 0, iq = side * (q[0] - lim) >= 0;
+          if (ip) out.push(p);
+          if (ip !== iq) out.push([lim, p[1] + ((lim - p[0]) / (q[0] - p[0])) * (q[1] - p[1])]);
+        });
+        poly = out;
+      }
+      if (!poly.length) return null;
+      const ys = poly.map(p => p[1]);
+      return low ? Math.max(...ys) : Math.min(...ys);
+    };
+    const room = (k: number) => {
+      let lo = PH.hudBottom + 8 + amp - edge(k, -1e9, 1e9, false)!;
+      const chip = edge(k, PH.lvL, PH.lvR, false);
+      if (chip !== null) lo = Math.max(lo, PH.lvB + 8 + amp - chip);
+      const nav = edge(k, PH.navL, PH.navR, true);
+      return [Math.ceil(lo), nav === null ? Infinity : Math.floor(PH.navTop - 8 - nav)];
+    };
+    let k = k0, [lo, hi] = room(k);
+    while (lo > hi && k > k0 * 0.85) { k = Math.max(k0 * 0.85, k - k0 * 0.01); [lo, hi] = room(k); }
+    return { y: lo > hi ? Math.round((lo + hi) / 2) : Math.min(Math.max(y0, lo), hi), k };
   }
 
   // ── Drag event wiring ─────────────────────────────────────────────
@@ -1733,7 +1829,8 @@ export class GameScene extends Phaser.Scene {
     cont.scaleX = 0.02; cont.scaleY = 0.5;   // start edge-on for the flip-in
 
     // phones: no taller than the room between the top bar and the reward chips over the bottom buttons
-    const CRW = this.phone ? Math.round(Math.min(this.gw * 0.234, (ry - this.phone.hudBottom - 8) * 2 / 1.3)) : Math.round(this.gw * 0.234);
+    // (round 2: and clear of the reward chips, which sit at most 18 px over the taller bottom buttons - gl/reward.ts; 3:4 art)
+    const CRW = this.phone ? Math.round(Math.min(this.gw * 0.234, Math.min(ry - this.phone.hudBottom - 8, this.phone.navTop - 32 - ry) * 2 / 1.34)) : Math.round(this.gw * 0.234);
     const imgKey = `card_${pair.result}`;
     let CRH: number;
 
@@ -2008,9 +2105,12 @@ export class GameScene extends Phaser.Scene {
     let picked: { result: string; chip: Phaser.GameObjects.Container; parts: { x: number }[] } | null = null;
     const unpick = () => { picked?.chip.destroy(); picked = null; };
     const add = (parent: Phaser.GameObjects.Container, result: string, x: number, y: number, w: number, h: number,
-      cover: Phaser.GameObjects.GameObject[]) => {
-      // phones: a tap target of at least PHONE_TAP px even round a small card
-      const hit = this.add.zone(x, y, this.phone ? Math.max(w, PHONE_TAP) : w, this.phone ? Math.max(h, PHONE_TAP) : h).setInteractive({ useHandCursor: true });
+      cover: Phaser.GameObjects.GameObject[], cell?: { w: number; h: number }) => {
+      // phones: a tap target of at least PHONE_TAP px even round a small card - but inside its cell (given: the result
+      // book's small cards), so two tap areas stay 3 px apart
+      const tw = cell ? Math.max(w, Math.min(PHONE_TAP, cell.w - 4)) : Math.max(w, PHONE_TAP);
+      const th = cell ? Math.max(h, Math.min(PHONE_TAP, cell.h - 4)) : Math.max(h, PHONE_TAP);
+      const hit = this.add.zone(x, y, this.phone ? tw : w, this.phone ? th : h).setInteractive({ useHandCursor: true });
       parent.add(hit);
       hit.on('pointerdown', () => {
         const short = this.gems < CARD_GEMS;
@@ -2223,7 +2323,7 @@ export class GameScene extends Phaser.Scene {
     // spread instead of 4 x 3 so each is big enough to tap
     const PH = this.phone;
     const bookTop = PH ? PH.hudBottom + 6 : 0;
-    const bookH = PH ? GH - bookTop - 8 : Math.round(GH * 0.72);
+    const bookH = PH ? GH - bookTop - PHONE_EDGE_BOTTOM : Math.round(GH * 0.72);
     const bookW = PH ? Math.min(GW - 24, Math.round(bookH * 2.3)) : Math.round(Math.min(GW * 0.62, GH * 1.15));
     const r = Math.round(Math.min(bookW, bookH) * 0.05);
     const book = this.add.container(CX, PH ? bookTop + Math.round(bookH / 2) : CY);
@@ -2294,7 +2394,8 @@ export class GameScene extends Phaser.Scene {
     const leftL = pageX + pad, rightR = pageX + pageW - pad;
     const halfCellW = ((rightR - leftL) - centerGap) / COLS;   // 좌2 + 우2, 동일 셀폭
     const cellH = (contentBottom - contentTop) / ROWS;
-    const cardH = Math.min(cellH * 0.9, halfCellW * 0.82 * 1.21), cardW = cardH / 1.21;
+    // (phones: a little shorter so the tap zones of two rows stay 8 px apart)
+    const cardH = Math.min(cellH * (PH ? 0.86 : 0.9), halfCellW * 0.82 * 1.21), cardW = cardH / 1.21;
     const totalPages = Math.ceil(COMPOUND_PAIRS.length / PER);
 
     const pages: Phaser.GameObjects.Container[] = [];
@@ -2350,12 +2451,13 @@ export class GameScene extends Phaser.Scene {
       }
     };
     drawDots();
+    const cardsLow = contentTop + cellH * (ROWS - 0.5) + Math.max(cardH, PHONE_TAP) / 2;   // the low row's tap areas (gemCards)
     const prevBtn = this.tapArrow(this.add.text(pageX + pad + navFont * 0.5, navCY, '‹', {
       fontFamily: '"Baloo 2"', fontSize: `${navFont}px`, color: '#6B49A8', fontStyle: 'bold',
-    }).setOrigin(0.5).setVisible(false));
+    }).setOrigin(0.5).setVisible(false), cardsLow);
     const nextBtn = this.tapArrow(this.add.text(pageX + pageW - pad - navFont * 0.5, navCY, '›', {
       fontFamily: '"Baloo 2"', fontSize: `${navFont}px`, color: '#6B49A8', fontStyle: 'bold',
-    }).setOrigin(0.5).setVisible(totalPages > 1));
+    }).setOrigin(0.5).setVisible(totalPages > 1), cardsLow);
     book.add([prevBtn, nextBtn]);
     const nav = (dir: number) => {
       const np = page + dir;
@@ -2421,7 +2523,7 @@ export class GameScene extends Phaser.Scene {
     // phones: the panel nearly as tall as the screen; on the left the icon and its name side by side, then Get / Use in 13 px
     const PH = this.phone;
     const panelW = PH ? Math.min(GW - 24, 640) : Math.round(Math.min(GW * 0.62, GH * 1.15));
-    const panelH = PH ? GH - 16 : Math.round(Math.min(GH * 0.66, panelW * 0.78));
+    const panelH = PH ? GH - PHONE_EDGE - PHONE_EDGE_BOTTOM : Math.round(Math.min(GH * 0.66, panelW * 0.78));
     const r = Math.round(Math.min(panelW, panelH) * 0.05);
     const panel = this.add.container(CX, CY);
     layer.add(panel);
@@ -2526,8 +2628,8 @@ export class GameScene extends Phaser.Scene {
     };
 
     // 우측 목록 (탭하여 선택 전환) — 닫기(X) 버튼 아래에서 시작해 겹침 방지
-    const rightTop = Math.max(contentTop, closeY + closeR + Math.round(panelH * 0.045));
-    const rItemGap = Math.round(panelH * 0.03);
+    const rightTop = Math.max(contentTop, closeY + closeR + (PH ? 8 : Math.round(panelH * 0.045)));   // phones: rows 40 px tall,
+    const rItemGap = PH ? 8 : Math.round(panelH * 0.03);                                                // 8 px apart
     const rItemH = (contentBottom - rightTop - rItemGap * (rows.length - 1)) / rows.length;
     const rIconSz = Math.round(rItemH * 0.5);
     const itemGfx: { k: string; g: Phaser.GameObjects.Graphics; top: number }[] = [];
@@ -2585,7 +2687,9 @@ export class GameScene extends Phaser.Scene {
     // ── Open "Compound Book" (purple themed) ──────────────────────
     // phones: Next Play 44 px tall at the bottom, the book between it and the top bar (the gem badge stays in sight)
     const PH = this.phone;
-    // (it stands in the bottom row in place of Mic and Hint, which have nothing to do once the game is over)
+    // (it stands in the bottom row in place of Mic and Hint, which have nothing to do once the game is over; the row
+    // PHONE_FINALE_NAV px tall at most, so the book above it is taller)
+    if (PH && PH.navH > PHONE_FINALE_NAV) this.phoneNavTo?.(PHONE_FINALE_NAV);
     const kb = PH ? PH.navH / 62 : s;   // Next Play's scale
     const bookTop = PH ? PH.hudBottom + 6 : 0;
     const bookH = PH ? PH.navTop - 10 - bookTop : Math.round(GH * 0.58);
@@ -2690,7 +2794,7 @@ export class GameScene extends Phaser.Scene {
 
     // Count badge — top-right of right grid
     const countTxt = this.add.text(rR, titleY, `${collected.size} / ${COMPOUND_PAIRS.length}`, {
-      fontFamily: '"Baloo 2"', fontSize: `${Math.round(titleH * 0.42)}px`,
+      fontFamily: '"Baloo 2"', fontSize: `${PH ? Math.max(12, Math.round(titleH * 0.42)) : Math.round(titleH * 0.42)}px`,
       color: '#8A43D6', fontStyle: 'bold',
     }).setOrigin(1, 0.5);
     book.add(countTxt);
@@ -2739,7 +2843,7 @@ export class GameScene extends Phaser.Scene {
               shadow: { offsetX: 0, offsetY: 2, color: 'rgba(0,0,0,0.3)', blur: 3, fill: true },
             }).setOrigin(0.5).setAlpha(0.75);
             pgCont.add([im, qTxt]);
-            buy.add(pgCont, p.result, tx, ty, rCardW, rCardH, [im, qTxt]);
+            buy.add(pgCont, p.result, tx, ty, rCardW, rCardH, [im, qTxt], { w: rCellW, h: rCellH });
           } else {
             // Fallback: grey slot
             const lo = this.add.graphics();
@@ -2750,7 +2854,7 @@ export class GameScene extends Phaser.Scene {
               color: '#8A6BB8', fontStyle: 'bold',
             }).setOrigin(0.5).setAlpha(0.4);
             pgCont.add([lo, lt]);
-            buy.add(pgCont, p.result, tx, ty, rCardW, rCardH, [lo, lt]);
+            buy.add(pgCont, p.result, tx, ty, rCardW, rCardH, [lo, lt], { w: rCellW, h: rCellH });
           }
         });
 
@@ -2808,8 +2912,10 @@ export class GameScene extends Phaser.Scene {
         nextBtn.setVisible(collPage < totalPages - 1);
       };
 
-      this.tapArrow(prevBtn).on('pointerdown', () => navigate(-1));
-      this.tapArrow(nextBtn).on('pointerdown', () => navigate(1));
+      // (the low row's '?' tap areas, as gemCards sizes them in their cells)
+      const cardsLow = contentTop + rCellH * (RROWS - 0.5) + Math.max(rCardH, Math.min(PHONE_TAP, rCellH - 4)) / 2;
+      this.tapArrow(prevBtn, cardsLow).on('pointerdown', () => navigate(-1));
+      this.tapArrow(nextBtn, cardsLow).on('pointerdown', () => navigate(1));
     }
 
     // Book entrance
@@ -2864,11 +2970,13 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** a book's page arrow (‹ ›): tappable over its glyph - on phones over a PHONE_TAP px square round it */
-  private tapArrow(t: Phaser.GameObjects.Text) {
+  /** a book's page arrow (‹ ›): tappable over its glyph - on phones over a PHONE_TAP px square round it; given clearTop
+   *  (the lowest card tap area above it, in the book's space) the square starts 4 px under it (3 after rounding), still PHONE_TAP tall */
+  private tapArrow(t: Phaser.GameObjects.Text, clearTop?: number) {
     if (!this.phone) return t.setInteractive({ useHandCursor: true });
     const d = PHONE_TAP;
-    return t.setInteractive({ hitArea: new Phaser.Geom.Rectangle(t.width / 2 - d / 2, t.height / 2 - d / 2, d, d), hitAreaCallback: Phaser.Geom.Rectangle.Contains, useHandCursor: true });
+    const y0 = clearTop === undefined ? t.height / 2 - d / 2 : Math.max(t.height / 2 - d / 2, clearTop + 4 - (t.y - t.height / 2));
+    return t.setInteractive({ hitArea: new Phaser.Geom.Rectangle(t.width / 2 - d / 2, y0, d, d), hitAreaCallback: Phaser.Geom.Rectangle.Contains, useHandCursor: true });
   }
 
   // ── Level (LEVELS; phonics-kit "공통 규칙: 레벨") ─────────────────────
